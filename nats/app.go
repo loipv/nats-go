@@ -28,7 +28,10 @@ type App struct {
 	pubMws    []PublishMiddleware
 	runners   []runner
 
-	isRunning  atomic.Bool
+	isRunning atomic.Bool
+	// pubOpen outlives isRunning during Shutdown so in-flight handlers can
+	// still publish; it closes once every handler has stopped.
+	pubOpen    atomic.Bool
 	nc         *natsio.Conn
 	js         jetstream.JetStream
 	closed     chan struct{}
@@ -167,6 +170,7 @@ func (a *App) Start(ctx context.Context) error {
 
 	a.started = true
 	a.isRunning.Store(true)
+	a.pubOpen.Store(true)
 	return nil
 }
 
@@ -195,6 +199,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	defer a.cancelBase()
 
 	stopErr := a.stopRunners(ctx)
+	a.pubOpen.Store(false)
 	if ctx.Err() == nil {
 		if err := a.nc.Drain(); err == nil {
 			select {
