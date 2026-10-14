@@ -17,14 +17,16 @@ import (
 type App struct {
 	opts options
 
-	mu      sync.Mutex
-	started bool
-	stopped bool
-	regErrs []error
-	regs    []registration
-	mws     []Middleware
-	pubMws  []PublishMiddleware
-	runners []runner
+	mu        sync.Mutex
+	started   bool
+	stopped   bool
+	regErrs   []error
+	regs      []registration
+	streams   []jetstream.StreamConfig
+	consumers []consumerDecl
+	mws       []Middleware
+	pubMws    []PublishMiddleware
+	runners   []runner
 
 	isRunning  atomic.Bool
 	nc         *natsio.Conn
@@ -145,6 +147,10 @@ func (a *App) Start(ctx context.Context) error {
 		return fmt.Errorf("nats: jetstream: %w", err)
 	}
 	a.nc, a.js, a.closed = nc, js, closed
+	if err := a.provision(ctx); err != nil {
+		nc.Close()
+		return err
+	}
 	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
 
 	for _, r := range a.regs {
