@@ -23,7 +23,7 @@
 //
 // Start connects, creates or updates declared streams and consumers, checks
 // that every consumed consumer exists and starts every handler, in that
-// order. The first failure stops everything already started and is returned.
+// order; no handler receives a message before every check has passed. The first failure stops everything already started and is returned.
 // Registration mistakes (empty subject, an option used on the wrong kind of
 // handler, a duplicate consumer) are collected and returned by Start too.
 //
@@ -42,7 +42,8 @@
 //   - Reply answers requests; the returned value is encoded and sent back.
 //   - Consume handles a durable JetStream consumer; pull and push consumers
 //     are detected at Start.
-//   - ConsumeOrdered reads a stream in order through an ephemeral ordered consumer.
+//   - ConsumeOrdered reads a stream in order through an ephemeral ordered
+//     consumer; it accepts only Concurrency(1) so order is kept.
 //
 // The error a handler returns decides what happens to the message:
 //

@@ -28,7 +28,9 @@ type options struct {
 
 func defaultOptions() options {
 	return options{
-		url:             natsio.DefaultURL,
+		url: natsio.DefaultURL,
+		// Keep reconnecting through outages; WithNATSOptions can override.
+		natsOpts:        []natsio.Option{natsio.MaxReconnects(-1)},
 		codec:           JSONCodec{},
 		logger:          slog.Default(),
 		shutdownTimeout: 30 * time.Second,
@@ -48,7 +50,9 @@ func WithURL(url string) Option {
 }
 
 // WithNATSOptions passes options straight to nats.go for anything this
-// package does not wrap.
+// package does not wrap. They are applied after the defaults (which include
+// MaxReconnects(-1): reconnect forever), so they override them. A
+// ClosedHandler passed here is replaced by the App's own.
 func WithNATSOptions(opts ...natsio.Option) Option {
 	return func(o *options) error {
 		o.natsOpts = append(o.natsOpts, opts...)

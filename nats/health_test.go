@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	natsio "github.com/nats-io/nats.go"
 	natstest "github.com/nats-io/nats-server/v2/test"
+	natsio "github.com/nats-io/nats.go"
 )
 
 func freePort(t *testing.T) int {

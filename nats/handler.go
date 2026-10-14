@@ -125,6 +125,9 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 			return c, fmt.Errorf("nats: option %s not allowed for %s", name, kind)
 		}
 	}
+	if kind == kindOrdered && c.concurrency > 1 {
+		return c, fmt.Errorf("nats: concurrency must be 1 for ordered consumers to keep stream order, got %d", c.concurrency)
+	}
 	if c.concurrency < 1 {
 		return c, fmt.Errorf("nats: concurrency must be at least 1, got %d", c.concurrency)
 	}
@@ -247,42 +250,41 @@ type job struct {
 // pool runs a handler on n worker goroutines. dispatch blocks while all
 // workers are busy, which pushes back on the subscription.
 type pool struct {
-	jobs   chan job
-	mu     sync.RWMutex
-	closed bool
-	wg     sync.WaitGroup
+	jobs chan job
+	quit chan struct{}
+	once sync.Once
+	wg   sync.WaitGroup
 }
 
 func newPool(n int, h func(context.Context, *RawMsg)) *pool {
-	p := &pool{jobs: make(chan job)}
+	p := &pool{jobs: make(chan job), quit: make(chan struct{})}
 	for range n {
 		p.wg.Go(func() {
-			for j := range p.jobs {
-				h(j.ctx, j.msg)
+			for {
+				select {
+				case j := <-p.jobs:
+					h(j.ctx, j.msg)
+				case <-p.quit:
+					return
+				}
 			}
 		})
 	}
 	return p
 }
 
-// dispatch hands m to a worker. Messages dispatched after close are dropped.
+// dispatch hands m to a worker. It returns without delivering once close
+// has been called; JetStream redelivers such messages.
 func (p *pool) dispatch(ctx context.Context, m *RawMsg) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.closed {
-		return
+	select {
+	case p.jobs <- job{ctx: ctx, msg: m}:
+	case <-p.quit:
 	}
-	p.jobs <- job{ctx: ctx, msg: m}
 }
 
-// close stops accepting messages and waits for workers or ctx expiry.
+// close stops accepting messages and waits for in-flight handlers or ctx expiry.
 func (p *pool) close(ctx context.Context) error {
-	p.mu.Lock()
-	if !p.closed {
-		p.closed = true
-		close(p.jobs)
-	}
-	p.mu.Unlock()
+	p.once.Do(func() { close(p.quit) })
 	done := make(chan struct{})
 	go func() { p.wg.Wait(); close(done) }()
 	select {

@@ -61,6 +61,42 @@ type jsReg struct {
 	consumer string
 	cfg      handlerConfig
 	h        Handler
+
+	// Set by prepare: exactly one of pull or push.
+	pull jetstream.Consumer
+	push jetstream.PushConsumer
+}
+
+// prepare resolves the consumer, detecting pull or push, without consuming.
+func (r *jsReg) prepare(ctx context.Context, a *App) error {
+	wrap := func(err error) error { return fmt.Errorf("nats: consume %s: %w", r.name(), err) }
+	r.pull, r.push = nil, nil
+	if r.kind == kindOrdered {
+		cfg := jetstream.OrderedConsumerConfig{FilterSubjects: r.cfg.filters}
+		if r.cfg.deliver != nil {
+			cfg.DeliverPolicy = *r.cfg.deliver
+		}
+		c, err := a.js.OrderedConsumer(ctx, r.stream, cfg)
+		if err != nil {
+			return wrap(err)
+		}
+		r.pull = c
+		return nil
+	}
+	c, err := a.js.Consumer(ctx, r.stream, r.consumer)
+	if errors.Is(err, jetstream.ErrNotPullConsumer) {
+		pc, err := a.js.PushConsumer(ctx, r.stream, r.consumer)
+		if err != nil {
+			return wrap(err)
+		}
+		r.push = pc
+		return nil
+	}
+	if err != nil {
+		return wrap(err)
+	}
+	r.pull = c
+	return nil
 }
 
 func (r *jsReg) name() string {
@@ -70,7 +106,7 @@ func (r *jsReg) name() string {
 	return r.stream + "/" + r.consumer
 }
 
-func (r *jsReg) start(ctx context.Context, a *App) (runner, error) {
+func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	rn := &jsRunner{name: r.name(), kind: r.kind}
 	h := a.chain(r.cfg, r.h)
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
@@ -87,65 +123,33 @@ func (r *jsReg) start(ctx context.Context, a *App) (runner, error) {
 
 	cb := func(m jetstream.Msg) { rn.pool.dispatch(withJSMsg(a.baseCtx, m), toRaw(m)) }
 	onErr := jetstream.ConsumeErrHandler(func(cc jetstream.ConsumeContext, err error) {
-		if errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, jetstream.ErrConsumerNotFound) {
+		// nats.go recreates ordered consumers itself, so only durable
+		// consumers stop for good when deleted.
+		if r.kind != kindOrdered && (errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, jetstream.ErrConsumerNotFound)) {
 			rn.fail(err)
 			cc.Stop()
 			return
 		}
 		log.Warn("nats: consume", "error", err)
 	})
-	var pullOpts []jetstream.PullConsumeOpt
-	if r.cfg.pullMax > 0 {
-		pullOpts = append(pullOpts, jetstream.PullMaxMessages(r.cfg.pullMax))
-	}
-	pullOpts = append(pullOpts, onErr)
 
-	cc, err := r.consume(ctx, a.js, cb, pullOpts, onErr)
+	var cc jetstream.ConsumeContext
+	var err error
+	if r.push != nil {
+		cc, err = r.push.Consume(cb, onErr)
+	} else {
+		opts := []jetstream.PullConsumeOpt{onErr}
+		if r.cfg.pullMax > 0 {
+			opts = append(opts, jetstream.PullMaxMessages(r.cfg.pullMax))
+		}
+		cc, err = r.pull.Consume(cb, opts...)
+	}
 	if err != nil {
 		_ = rn.pool.close(context.Background())
-		return nil, err
+		return nil, fmt.Errorf("nats: consume %s: %w", r.name(), err)
 	}
 	rn.cc = cc
 	return rn, nil
-}
-
-func (r *jsReg) consume(ctx context.Context, js jetstream.JetStream, cb jetstream.MessageHandler, pullOpts []jetstream.PullConsumeOpt, onErr jetstream.ConsumeErrHandler) (jetstream.ConsumeContext, error) {
-	wrap := func(err error) error { return fmt.Errorf("nats: consume %s: %w", r.name(), err) }
-	if r.kind == kindOrdered {
-		cfg := jetstream.OrderedConsumerConfig{FilterSubjects: r.cfg.filters}
-		if r.cfg.deliver != nil {
-			cfg.DeliverPolicy = *r.cfg.deliver
-		}
-		c, err := js.OrderedConsumer(ctx, r.stream, cfg)
-		if err != nil {
-			return nil, wrap(err)
-		}
-		cc, err := c.Consume(cb, pullOpts...)
-		if err != nil {
-			return nil, wrap(err)
-		}
-		return cc, nil
-	}
-	c, err := js.Consumer(ctx, r.stream, r.consumer)
-	if errors.Is(err, jetstream.ErrNotPullConsumer) {
-		pc, err := js.PushConsumer(ctx, r.stream, r.consumer)
-		if err != nil {
-			return nil, wrap(err)
-		}
-		cc, err := pc.Consume(cb, onErr)
-		if err != nil {
-			return nil, wrap(err)
-		}
-		return cc, nil
-	}
-	if err != nil {
-		return nil, wrap(err)
-	}
-	cc, err := c.Consume(cb, pullOpts...)
-	if err != nil {
-		return nil, wrap(err)
-	}
-	return cc, nil
 }
 
 type jsRunner struct {

@@ -56,6 +56,12 @@ type registration interface {
 	start(ctx context.Context, a *App) (runner, error)
 }
 
+// preparer is a registration that resolves server-side resources before
+// any registration starts receiving messages.
+type preparer interface {
+	prepare(ctx context.Context, a *App) error
+}
+
 // runner is a started handler.
 type runner interface {
 	// stop stops intake and waits for in-flight handlers or ctx expiry.
@@ -159,22 +165,44 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
+	fail := func(err error) error {
+		a.cancelBase()
+		_ = a.stopRunners(ctx)
+		a.runners = nil
+		a.pubOpen.Store(false)
+		nc.Close()
+		return err
+	}
 
+	// Resolve every consumer before any handler sees a message, so a failed
+	// Start has no side effects.
+	var core, jsRegs []registration
 	for _, r := range a.regs {
+		p, ok := r.(preparer)
+		if !ok {
+			core = append(core, r)
+			continue
+		}
+		if err := p.prepare(ctx, a); err != nil {
+			return fail(err)
+		}
+		jsRegs = append(jsRegs, r)
+	}
+
+	// Handlers may publish as soon as they receive messages. Core
+	// subscriptions start first: they fail synchronously on a bad subject
+	// before any JetStream backlog is delivered.
+	a.pubOpen.Store(true)
+	for _, r := range slices.Concat(core, jsRegs) {
 		rn, err := r.start(ctx, a)
 		if err != nil {
-			a.stopRunners(ctx)
-			a.runners = nil
-			a.cancelBase()
-			nc.Close()
-			return err
+			return fail(err)
 		}
 		a.runners = append(a.runners, rn)
 	}
 
 	a.started = true
 	a.isRunning.Store(true)
-	a.pubOpen.Store(true)
 	return nil
 }
 
@@ -200,6 +228,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.stopped = true
 	a.isRunning.Store(false)
 	a.mu.Unlock()
+	// Handler contexts live until the deadline, then are cancelled so
+	// ctx-aware handlers return and stopRunners can finish.
+	stopCancel := context.AfterFunc(ctx, a.cancelBase)
+	defer stopCancel()
 	defer a.cancelBase()
 
 	stopErr := a.stopRunners(ctx)

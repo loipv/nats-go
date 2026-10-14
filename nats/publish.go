@@ -102,6 +102,9 @@ func Request[Resp any](ctx context.Context, app *App, subject string, v any, opt
 	if err != nil {
 		return nil, fmt.Errorf("nats: request %q: %w", subject, err)
 	}
+	if reply == nil {
+		return nil, fmt.Errorf("nats: request %q: no reply (a publish middleware did not call next)", subject)
+	}
 	if desc := reply.Header.Get("Nats-Service-Error"); desc != "" {
 		code, _ := strconv.Atoi(reply.Header.Get("Nats-Service-Error-Code"))
 		return nil, &ServiceError{Code: code, Description: desc}

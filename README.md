@@ -96,6 +96,7 @@ A payload type with a `Validate() error` method is validated after decoding.
 - `Start(ctx)` connects, creates or updates declared streams and consumers (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned. Registration mistakes are returned here too.
 - `Shutdown(ctx)` stops intake, waits for in-flight handlers and drains the connection within the context deadline. Unacked JetStream messages are redelivered by the server.
 - `Run(ctx)` is `Start`, wait for `ctx`, then `Shutdown` bounded by `WithShutdownTimeout` (30s by default).
+- The connection reconnects forever by default (`nats.WithNATSOptions(natsio.MaxReconnects(n))` to change it); while reconnecting, health reports `degraded`.
 - `Health()` and `HealthHandler()` report the connection and every handler; mount the handler on your own HTTP server.
 
 ## Authentication and TLS
