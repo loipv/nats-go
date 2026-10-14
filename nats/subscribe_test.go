@@ -1,0 +1,114 @@
+package nats
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestSubscribeWildcard(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	got := make(chan string, 2)
+	Subscribe(a, "orders.*", func(_ context.Context, m *Msg[[]byte]) error { got <- m.Subject; return nil })
+	start(t, a)
+	_ = a.Conn().Publish("orders.created", nil)
+	_ = a.Conn().Publish("orders.eu.created", nil)
+	if s := recv(t, got); s != "orders.created" {
+		t.Fatal(s)
+	}
+	expectNone(t, got, 200*time.Millisecond)
+}
+
+func TestSubscribeQueueGroupDeliversOnce(t *testing.T) {
+	s := runServer(t)
+	var n atomic.Int32
+	for range 2 {
+		a := newApp(t, s)
+		Subscribe(a, "jobs", func(context.Context, *Msg[[]byte]) error { n.Add(1); return nil }, Queue("w"))
+		start(t, a)
+	}
+	pub := newApp(t, s)
+	start(t, pub)
+	for range 10 {
+		_ = pub.Conn().Publish("jobs", nil)
+	}
+	_ = pub.Conn().Flush()
+	time.Sleep(300 * time.Millisecond)
+	if n.Load() != 10 {
+		t.Fatal(n.Load())
+	}
+}
+
+func TestReplyRespondsAndMapsErrors(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	Reply(a, "math.double", func(_ context.Context, m *Msg[int]) (int, error) {
+		if m.Data < 0 {
+			return 0, Terminal(errors.New("negative"))
+		}
+		if m.Data == 0 {
+			return 0, errors.New("boom")
+		}
+		return m.Data * 2, nil
+	})
+	start(t, a)
+	r, err := a.Conn().Request("math.double", []byte("21"), time.Second)
+	if err != nil || string(r.Data) != "42" {
+		t.Fatal(r, err)
+	}
+	r, _ = a.Conn().Request("math.double", []byte("-1"), time.Second)
+	if r.Header.Get("Nats-Service-Error-Code") != "400" || r.Header.Get("Nats-Service-Error") != "negative" {
+		t.Fatal(r.Header)
+	}
+	r, _ = a.Conn().Request("math.double", []byte("0"), time.Second)
+	if r.Header.Get("Nats-Service-Error-Code") != "500" {
+		t.Fatal(r.Header)
+	}
+}
+
+func TestSubscribeTimeoutSetsDeadline(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	got := make(chan bool, 1)
+	Subscribe(a, "t", func(ctx context.Context, _ *Msg[[]byte]) error {
+		_, ok := ctx.Deadline()
+		got <- ok
+		return nil
+	}, Timeout(time.Second))
+	start(t, a)
+	_ = a.Conn().Publish("t", nil)
+	if !recv(t, got) {
+		t.Fatal("handler ctx must have deadline")
+	}
+}
+
+func TestInvalidSubjectFailsStart(t *testing.T) {
+	for _, subj := range []string{"", "foo..bar"} {
+		a := newApp(t, runServer(t))
+		Subscribe(a, subj, func(context.Context, *Msg[[]byte]) error { return nil })
+		if err := a.Start(context.Background()); err == nil {
+			t.Fatalf("subject %q must fail Start", subj)
+		}
+		if a.running() {
+			t.Fatal("must not be running")
+		}
+	}
+}
+
+func TestReplyPanicWithRecoverSendsSingleLineError(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	a.Use(Recover())
+	Reply(a, "boom", func(context.Context, *Msg[int]) (int, error) { panic("kaboom") })
+	start(t, a)
+	r, err := a.Conn().Request("boom", []byte("1"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Header.Get("Nats-Service-Error-Code") != "500" || r.Header.Get("Nats-Service-Error") != "nats: panic: kaboom" {
+		t.Fatalf("%q", r.Header)
+	}
+}

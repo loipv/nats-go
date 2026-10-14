@@ -53,3 +53,24 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func recv[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(2 * time.Second):
+		t.Fatal("nothing received within 2s")
+		var zero T
+		return zero
+	}
+}
+
+func expectNone[T any](t *testing.T, ch <-chan T, d time.Duration) {
+	t.Helper()
+	select {
+	case v := <-ch:
+		t.Fatalf("unexpected value %v", v)
+	case <-time.After(d):
+	}
+}
