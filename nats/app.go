@@ -17,16 +17,17 @@ import (
 type App struct {
 	opts options
 
-	mu        sync.Mutex
-	started   bool
-	stopped   bool
-	regErrs   []error
-	regs      []registration
-	streams   []jetstream.StreamConfig
-	consumers []consumerDecl
-	mws       []Middleware
-	pubMws    []PublishMiddleware
-	runners   []runner
+	mu          sync.Mutex
+	started     bool
+	stopped     bool
+	regErrs     []error
+	regs        []registration
+	streams     []jetstream.StreamConfig
+	consumers   []consumerDecl
+	consumeKeys map[string]bool
+	mws         []Middleware
+	pubMws      []PublishMiddleware
+	runners     []runner
 
 	isRunning atomic.Bool
 	// pubOpen outlives isRunning during Shutdown so in-flight handlers can
