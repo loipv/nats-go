@@ -42,10 +42,13 @@ type App struct {
 
 // HandlerStatus describes one registered handler.
 type HandlerStatus struct {
-	Name      string
-	Kind      string
-	State     string
-	LastError string
+	// Name is the subject, "stream/consumer" or "stream (ordered)".
+	Name string `json:"name"`
+	// Kind is subscribe, reply, consume or ordered.
+	Kind string `json:"kind"`
+	// State is running or stopped.
+	State     string `json:"state"`
+	LastError string `json:"last_error,omitempty"`
 }
 
 // registration is a handler recorded before Start.
