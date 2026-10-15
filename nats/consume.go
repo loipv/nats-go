@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -69,12 +70,15 @@ type jsReg struct {
 	pull jetstream.Consumer
 	push jetstream.PushConsumer
 	info *jetstream.ConsumerInfo
+
+	// ackWait is the consumer's AckWait, set by prepare for durable consumers.
+	ackWait time.Duration
 }
 
 // prepare resolves the consumer, detecting pull or push, without consuming.
 func (r *jsReg) prepare(ctx context.Context, a *App) error {
 	wrap := func(err error) error { return fmt.Errorf("nats: consume %s: %w", r.name(), err) }
-	r.pull, r.push, r.info = nil, nil, nil
+	r.pull, r.push, r.info, r.ackWait = nil, nil, nil, defaultAckWait
 	if r.kind == kindOrdered {
 		cfg := jetstream.OrderedConsumerConfig{FilterSubjects: r.cfg.filters}
 		if r.cfg.deliver != nil {
@@ -98,6 +102,9 @@ func (r *jsReg) prepare(ctx context.Context, a *App) error {
 		return wrap(err)
 	} else {
 		r.pull, r.info = c, c.CachedInfo()
+	}
+	if w := r.info.Config.AckWait; w > 0 {
+		r.ackWait = w
 	}
 	return r.check(ctx, a)
 }
@@ -147,8 +154,15 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			a.handleLocal(ctx, h, raw, rc, rn.stopping, src, log)
 			return
 		}
+		// call runs the handler, extending AckWait meanwhile if asked to.
+		call := func() error {
+			if r.cfg.autoInProgress {
+				defer keepAlive([]jetstream.Msg{jsMsgFrom(ctx)}, r.ackWait/2, log)()
+			}
+			return safeCall(ctx, h, raw, log)
+		}
 		if r.cfg.manualAck {
-			if err := safeCall(ctx, h, raw, log); err != nil {
+			if err := call(); err != nil {
 				log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
 			}
 			return
@@ -162,7 +176,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		// on a slow handler) is given up on without running the handler.
 		err := errMaxAttempts
 		if !rc.exceeded(src.deliveries) {
-			err = safeCall(ctx, h, raw, log)
+			err = call()
 		}
 		a.dispose(ctx, m, raw, err, rc, src, log)
 	})
