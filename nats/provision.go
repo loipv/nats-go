@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -67,6 +68,13 @@ func (a *App) provision(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("nats: sync consumer %q on stream %q: %w", d.name(), d.stream, err)
 		}
+	}
+	for _, s := range a.kvStores {
+		kv, err := a.js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: s.bucket, History: 1, LimitMarkerTTL: time.Minute})
+		if err != nil {
+			return fmt.Errorf("nats: sync kv bucket %q: %w", s.bucket, err)
+		}
+		s.kv.Store(&kv)
 	}
 	return nil
 }
