@@ -121,3 +121,27 @@ func TestShutdownAbandonsRetryWait(t *testing.T) {
 		t.Fatal(err, time.Since(begin))
 	}
 }
+
+func TestReplyEncodeFailureNotRetried(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupDLQ(t, a)
+	var calls atomic.Int32
+	type bad struct{ F func() }
+	Reply(a, "unencodable", func(context.Context, *Msg[int]) (bad, error) {
+		calls.Add(1)
+		return bad{F: func() {}}, nil
+	}, MaxAttempts(3), fast, DLQ("dlq.reply"))
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := Request[int](ctx, a, "unencodable", 1)
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != 500 {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if calls.Load() != 1 || len(dlqMsgs(t, a)) != 0 {
+		t.Fatal(calls.Load(), len(dlqMsgs(t, a)))
+	}
+}

@@ -21,20 +21,28 @@ func Subscribe[T any](app *App, subject string, fn func(context.Context, *Msg[T]
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.
 func Reply[Req, Resp any](app *App, subject string, fn func(context.Context, *Msg[Req]) (Resp, error), opts ...HandlerOption) {
-	codec := app.opts.codec
-	h := typed(codec, func(ctx context.Context, m *Msg[Req]) error {
+	h := typed(app.opts.codec, func(ctx context.Context, m *Msg[Req]) error {
 		resp, err := fn(ctx, m)
 		if err != nil {
 			return err
 		}
-		data, err := encode(codec, resp)
-		if err != nil {
-			return fmt.Errorf("nats: encode response: %w", err)
+		if out, ok := ctx.Value(replyKey{}).(*reply); ok {
+			out.v, out.set = resp, true
 		}
-		return app.nc.Publish(m.Raw.Reply, data)
+		return nil
 	})
 	registerCore(app, kindReply, subject, h, opts)
 }
+
+// reply carries Reply's response out of the handler chain. The worker sends
+// it once the chain has succeeded, so a failure to encode or send the
+// response never re-runs the handler.
+type reply struct {
+	v   any
+	set bool
+}
+
+type replyKey struct{}
 
 func registerCore(app *App, kind handlerKind, subject string, h Handler, opts []HandlerOption) {
 	cfg, err := newHandlerConfig(kind, opts)
@@ -76,8 +84,26 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			log.Warn("nats: request without reply subject dropped", "subject", m.Subject)
 			return
 		}
+		if r.kind != kindReply {
+			a.handleLocal(ctx, h, m, rc, stopping, dlqSource{}, log)
+			return
+		}
+		out := &reply{}
+		err, abandoned := a.handleLocal(context.WithValue(ctx, replyKey{}, out), h, m, rc, stopping, dlqSource{}, log)
+		if abandoned {
+			return
+		}
+		if err == nil && out.set {
+			var data []byte
+			if data, err = encode(a.opts.codec, out.v); err != nil {
+				err = fmt.Errorf("nats: encode response: %w", err)
+				log.Error("nats: handler failed", "subject", m.Subject, "error", err)
+			} else if err := a.nc.Publish(m.Reply, data); err != nil {
+				log.Error("nats: send response", "subject", m.Subject, "error", err)
+			}
+		}
 		// The requester gets the error even when the message went to the DLQ.
-		if err := a.handleLocal(ctx, h, m, rc, stopping, dlqSource{}, log); err != nil && r.kind == kindReply {
+		if err != nil {
 			if err := respondError(a.nc, m.Reply, err); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
 			}

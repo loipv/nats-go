@@ -123,15 +123,15 @@ func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConf
 
 // handleLocal runs h with in-process retries and, when the message finally
 // fails, logs it and publishes it to the DLQ if one is set. It returns the
-// final error, or nil when h succeeded or the message was abandoned.
-func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *slog.Logger) error {
+// final error and whether the message was abandoned.
+func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *slog.Logger) (err error, abandoned bool) {
 	err, attempts, abandoned := a.retryLocal(ctx, h, m, rc, stopping, log)
 	if err == nil || abandoned {
-		return nil
+		return err, abandoned
 	}
 	if rc.dlq == "" {
 		log.Error("nats: handler failed", "subject", m.Subject, "attempt", attempts, "error", err)
-		return err
+		return err, false
 	}
 	src.deliveries = attempts
 	if perr := a.publishDLQ(ctx, rc.dlq, m, err, src); perr != nil {
@@ -139,5 +139,5 @@ func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryCon
 	} else {
 		log.Error("nats: handler failed, message sent to DLQ", "subject", m.Subject, "attempt", attempts, "error", err, "dlq", rc.dlq)
 	}
-	return err
+	return err, false
 }

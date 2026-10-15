@@ -144,7 +144,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			if md, err := jsMsgFrom(ctx).Metadata(); err == nil {
 				src.seq, src.msgID = md.Sequence.Stream, true
 			}
-			_ = a.handleLocal(ctx, h, raw, rc, rn.stopping, src, log)
+			a.handleLocal(ctx, h, raw, rc, rn.stopping, src, log)
 			return
 		}
 		if r.cfg.manualAck {
