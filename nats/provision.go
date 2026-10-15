@@ -59,14 +59,8 @@ func (a *App) provision(ctx context.Context) error {
 		}
 	}
 	for _, d := range a.consumers {
-		var err error
-		if d.cfg.DeliverSubject != "" {
-			_, err = a.js.CreateOrUpdatePushConsumer(ctx, d.stream, d.cfg)
-		} else {
-			_, err = a.js.CreateOrUpdateConsumer(ctx, d.stream, d.cfg)
-		}
-		if err != nil {
-			return fmt.Errorf("nats: sync consumer %q on stream %q: %w", d.name(), d.stream, err)
+		if err := a.syncConsumer(ctx, d); err != nil {
+			return err
 		}
 	}
 	for _, s := range a.kvStores {
@@ -75,6 +69,19 @@ func (a *App) provision(ctx context.Context) error {
 			return fmt.Errorf("nats: sync kv bucket %q: %w", s.bucket, err)
 		}
 		s.kv.Store(&kv)
+	}
+	return nil
+}
+
+func (a *App) syncConsumer(ctx context.Context, d consumerDecl) error {
+	var err error
+	if d.cfg.DeliverSubject != "" {
+		_, err = a.js.CreateOrUpdatePushConsumer(ctx, d.stream, d.cfg)
+	} else {
+		_, err = a.js.CreateOrUpdateConsumer(ctx, d.stream, d.cfg)
+	}
+	if err != nil {
+		return fmt.Errorf("nats: sync consumer %q on stream %q: %w", d.name(), d.stream, err)
 	}
 	return nil
 }

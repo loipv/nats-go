@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -149,7 +148,8 @@ func (r *jsReg) source(m jetstream.Msg) dlqSource {
 }
 
 func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
-	rn := &jsRunner{name: r.name(), kind: r.kind, stopping: make(chan struct{})}
+	rn := &jsRunner{runnerState: newRunnerState(r.name(), r.kind)}
+	rn.ctx, rn.cancel = context.WithCancel(context.Background())
 	h := a.chain(r.cfg, r.h)
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
 	rc := r.cfg.retry(r.kind)
@@ -161,7 +161,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			if md, err := jsMsgFrom(ctx).Metadata(); err == nil {
 				src.seq, src.msgID = md.Sequence.Stream, true
 			}
-			a.handleLocal(ctx, h, raw, rc, rn.stopping, src, log)
+			a.handleLocal(ctx, h, raw, rc, rn.ctx.Done(), src, log)
 			return
 		}
 		// call runs the handler, extending AckWait meanwhile if asked to.
@@ -189,17 +189,58 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	})
 
 	cb := func(m jetstream.Msg) { rn.pool.dispatch(withJSMsg(a.baseCtx, m), toRaw(m)) }
-	onErr := jetstream.ConsumeErrHandler(func(cc jetstream.ConsumeContext, err error) {
-		// nats.go recreates ordered consumers itself, so only durable
-		// consumers stop for good when deleted.
-		if r.kind != kindOrdered && (errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, jetstream.ErrConsumerNotFound)) {
-			rn.fail(err)
-			cc.Stop()
+	var onErr jetstream.ConsumeErrHandler
+	onErr = func(cc jetstream.ConsumeContext, err error) {
+		// nats.go recreates ordered consumers itself.
+		if r.kind == kindOrdered || !mayBeGone(err) {
+			log.Warn("nats: consume", "error", err)
 			return
 		}
-		log.Warn("nats: consume", "error", err)
-	})
+		// Off the nats.go goroutine: the lookup in gone blocks, and push
+		// consumers call onErr holding the lock that cc.Stop takes.
+		rn.supervise(cc, err, func(ctx context.Context, cc jetstream.ConsumeContext, err error) {
+			rn.mu.Lock()
+			replaced := cc != rn.cc
+			rn.mu.Unlock()
+			if replaced {
+				return
+			}
+			if !r.gone(ctx, a, err) {
+				log.Warn("nats: consume", "error", err)
+				return
+			}
+			rn.setRestarting(err)
+			cc.Stop()
+			reconnect := func(ctx context.Context) error {
+				if err := a.recoverConsumer(ctx, r.stream, r.consumer); err != nil {
+					return err
+				}
+				// Prepare a copy: workers read r.ackWait concurrently, so
+				// they keep the AckWait seen at Start.
+				nr := *r
+				if err := nr.prepare(ctx, a); err != nil {
+					return err
+				}
+				return rn.consume(&nr, cb, onErr)
+			}
+			if a.superviseLoop(ctx, ctx.Done(), reconnect, log) {
+				rn.setRestarted()
+			}
+		})
+	}
 
+	if err := rn.consume(r, cb, onErr); err != nil {
+		_ = rn.pool.close(context.Background())
+		return nil, err
+	}
+	return rn, nil
+}
+
+// consume starts consuming the consumer r resolved in prepare. It holds mu
+// until cc is set, so onErr never sees a consume context it does not know.
+func (rn *jsRunner) consume(r *jsReg, cb jetstream.MessageHandler, onErr jetstream.ConsumeErrHandler) error {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
 	var cc jetstream.ConsumeContext
 	var err error
 	if r.push != nil {
@@ -212,57 +253,79 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		cc, err = r.pull.Consume(cb, opts...)
 	}
 	if err != nil {
-		_ = rn.pool.close(context.Background())
-		return nil, fmt.Errorf("nats: consume %s: %w", r.name(), err)
+		return fmt.Errorf("nats: consume %s: %w", r.name(), err)
 	}
 	rn.cc = cc
-	return rn, nil
+	return nil
 }
 
 type jsRunner struct {
-	name string
-	kind handlerKind
-	cc   jetstream.ConsumeContext
+	runnerState
 	pool *pool
 
-	// stopping is closed when stop begins, cutting retry waits short.
-	stopping chan struct{}
-	stopOnce sync.Once
+	// ctx is cancelled when stop begins, cutting retry and restart waits
+	// short.
+	ctx    context.Context
+	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	stopped bool
-	lastErr error
+	// Guarded by mu. supervisor is closed when the running supervisor
+	// exits; nil when none runs. pending is the error it runs for next.
+	cc         jetstream.ConsumeContext
+	supervisor chan struct{}
+	pendingCC  jetstream.ConsumeContext
+	pendingErr error
 }
 
-func (r *jsRunner) fail(err error) {
+// supervise runs fn for the error err of cc in a goroutine, unless the
+// runner is stopping. While one runs, the latest error is kept and run
+// next: it may come from a consume context the running one just opened.
+func (r *jsRunner) supervise(cc jetstream.ConsumeContext, err error, fn func(ctx context.Context, cc jetstream.ConsumeContext, err error)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.stopped, r.lastErr = true, err
+	if r.ctx.Err() != nil {
+		return
+	}
+	if r.supervisor != nil {
+		r.pendingCC, r.pendingErr = cc, err
+		return
+	}
+	done := make(chan struct{})
+	r.supervisor = done
+	go func() {
+		defer close(done)
+		for err != nil {
+			fn(r.ctx, cc, err)
+			r.mu.Lock()
+			cc, err, r.pendingCC, r.pendingErr = r.pendingCC, r.pendingErr, nil, nil
+			if err == nil {
+				r.supervisor = nil
+			}
+			r.mu.Unlock()
+		}
+	}()
 }
 
-// stop stops fetching; buffered, unacked messages are redelivered by the server.
+// stop stops the supervisor, then fetching; buffered, unacked messages are
+// redelivered by the server.
 func (r *jsRunner) stop(ctx context.Context) error {
-	r.stopOnce.Do(func() { close(r.stopping) })
+	r.cancel()
+	r.setStopped()
 	r.mu.Lock()
-	r.stopped = true
+	sup := r.supervisor
 	r.mu.Unlock()
-	r.cc.Stop()
+	if sup != nil {
+		select {
+		case <-sup:
+		case <-ctx.Done():
+		}
+	}
+	r.mu.Lock()
+	cc := r.cc
+	r.mu.Unlock()
+	cc.Stop()
 	select {
-	case <-r.cc.Closed():
+	case <-cc.Closed():
 	case <-ctx.Done():
 	}
 	return r.pool.close(ctx)
-}
-
-func (r *jsRunner) status() HandlerStatus {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st := HandlerStatus{Name: r.name, Kind: string(r.kind), State: "running"}
-	if r.stopped {
-		st.State = "stopped"
-	}
-	if r.lastErr != nil {
-		st.LastError = r.lastErr.Error()
-	}
-	return st
 }

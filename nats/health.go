@@ -10,8 +10,8 @@ import (
 
 // Report is the health of an App.
 type Report struct {
-	// Status is "ok", "degraded" (reconnecting or a handler stopped) or
-	// "down" (not started, shut down or connection closed).
+	// Status is "ok", "degraded" (reconnecting, or a handler restarting or
+	// stopped) or "down" (not started, shut down or connection closed).
 	Status string `json:"status"`
 	// Connection is the nats.go connection status, such as CONNECTED or RECONNECTING.
 	Connection string          `json:"connection"`
@@ -29,16 +29,16 @@ func (a *App) Health() Report {
 	if nc != nil {
 		r.Connection = nc.Status().String()
 	}
-	stopped := false
+	notRunning := false
 	for _, rn := range runners {
 		st := rn.status()
-		stopped = stopped || st.State == "stopped"
+		notRunning = notRunning || st.State != "running"
 		r.Handlers = append(r.Handlers, st)
 	}
 	switch {
 	case !r.Ready || r.Connection == natsio.CLOSED.String():
 		r.Status = "down"
-	case r.Connection != natsio.CONNECTED.String() || stopped:
+	case r.Connection != natsio.CONNECTED.String() || notRunning:
 		r.Status = "degraded"
 	default:
 		r.Status = "ok"

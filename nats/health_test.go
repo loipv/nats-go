@@ -42,14 +42,15 @@ func TestHealthLifecycle(t *testing.T) {
 	}
 }
 
+// M2 ruling: a deleted consumer makes the handler restarting, not stopped.
 func TestHealthDegradedWhenHandlerStopped(t *testing.T) {
 	s := runServer(t)
-	a := newApp(t, s)
+	a := newApp(t, s, WithRestartBackoff(func(int) time.Duration { return time.Hour }))
 	setupStream(t, a)
 	Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error { return nil })
 	start(t, a)
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
-	waitFor(t, func() bool { return a.Health().Status == "degraded" })
+	waitFor(t, func() bool { h := a.Health(); return h.Status == "degraded" && h.Handlers[0].State == "restarting" })
 	rec := httptest.NewRecorder()
 	a.HealthHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != 503 {

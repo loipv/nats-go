@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -63,7 +62,7 @@ func (r *batchReg[T]) start(_ context.Context, a *App) (runner, error) {
 	// The loop context only stops fetching; handlers get one derived from
 	// baseCtx, which lives until the Shutdown deadline.
 	ctx, cancel := context.WithCancel(a.baseCtx)
-	rn := &batchRunner{name: r.name(), cancel: cancel, done: make(chan struct{})}
+	rn := &batchRunner{runnerState: newRunnerState(r.name(), r.kind), cancel: cancel, done: make(chan struct{})}
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
 	go func() {
 		defer close(rn.done)
@@ -72,11 +71,20 @@ func (r *batchReg[T]) start(_ context.Context, a *App) (runner, error) {
 	return rn, nil
 }
 
-// loop fetches and handles batches one at a time until ctx is cancelled or
-// the consumer is gone.
+// loop fetches and handles batches one at a time until ctx is cancelled,
+// restarting when the consumer is deleted.
 func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *slog.Logger) {
 	rc := r.cfg.retry(r.kind)
+	reconnect := func(ctx context.Context) error {
+		if err := a.recoverConsumer(ctx, r.stream, r.consumer); err != nil {
+			return err
+		}
+		return r.prepare(ctx, a)
+	}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		msgs, err := r.fetch(ctx)
 		if ctx.Err() != nil {
 			// Stopping: the server redelivers fetched messages after AckWait.
@@ -87,9 +95,12 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *sl
 		}
 		switch {
 		case err == nil:
-		case errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, jetstream.ErrConsumerNotFound):
-			rn.fail(err)
-			return
+		case r.gone(ctx, a, err):
+			rn.setRestarting(err)
+			if !a.superviseLoop(ctx, ctx.Done(), reconnect, log) {
+				return
+			}
+			rn.setRestarted()
 		default:
 			log.Warn("nats: fetch", "error", err)
 			select {
@@ -191,27 +202,16 @@ func (r *batchReg[T]) call(ctx context.Context, ms []*Msg[T], log *slog.Logger) 
 }
 
 type batchRunner struct {
-	name   string
+	runnerState
 	cancel context.CancelFunc
 	// done is closed when the loop exits.
 	done chan struct{}
-
-	mu      sync.Mutex
-	stopped bool
-	lastErr error
 }
 
-func (r *batchRunner) fail(err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.stopped, r.lastErr = true, err
-}
-
-// stop stops fetching and waits for the batch in flight or ctx expiry.
+// stop stops fetching, or restarting, and waits for the batch in flight or
+// ctx expiry.
 func (r *batchRunner) stop(ctx context.Context) error {
-	r.mu.Lock()
-	r.stopped = true
-	r.mu.Unlock()
+	r.setStopped()
 	r.cancel()
 	select {
 	case <-r.done:
@@ -219,17 +219,4 @@ func (r *batchRunner) stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func (r *batchRunner) status() HandlerStatus {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st := HandlerStatus{Name: r.name, Kind: string(kindBatch), State: "running"}
-	if r.stopped {
-		st.State = "stopped"
-	}
-	if r.lastErr != nil {
-		st.LastError = r.lastErr.Error()
-	}
-	return st
 }

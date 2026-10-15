@@ -24,6 +24,7 @@ type options struct {
 	codec           Codec
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
+	restartBackoff  Backoff
 }
 
 func defaultOptions() options {
@@ -34,6 +35,7 @@ func defaultOptions() options {
 		codec:           JSONCodec{},
 		logger:          slog.Default(),
 		shutdownTimeout: 30 * time.Second,
+		restartBackoff:  ExponentialBackoff(time.Second, 30*time.Second),
 	}
 }
 
@@ -90,6 +92,20 @@ func WithShutdownTimeout(d time.Duration) Option {
 			return errors.New("nats: shutdown timeout must be positive")
 		}
 		o.shutdownTimeout = d
+		return nil
+	}
+}
+
+// WithRestartBackoff sets the delay before each attempt to restart a
+// Consume or ConsumeBatch handler whose consumer was deleted. Attempts go on
+// until one succeeds or the App shuts down. Defaults to
+// ExponentialBackoff(time.Second, 30*time.Second).
+func WithRestartBackoff(b Backoff) Option {
+	return func(o *options) error {
+		if b == nil {
+			return errors.New("nats: nil restart backoff")
+		}
+		o.restartBackoff = b
 		return nil
 	}
 }

@@ -47,9 +47,13 @@ type HandlerStatus struct {
 	Name string `json:"name"`
 	// Kind is subscribe, reply, consume, ordered or batch.
 	Kind string `json:"kind"`
-	// State is running or stopped.
+	// State is running, restarting (its consumer was deleted) or stopped
+	// (after Shutdown).
 	State     string `json:"state"`
 	LastError string `json:"last_error,omitempty"`
+	// Restarts counts how often the handler was restarted after its
+	// consumer was deleted.
+	Restarts int `json:"restarts"`
 }
 
 // registration is a handler recorded before Start.
