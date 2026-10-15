@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -206,4 +207,46 @@ func TestIdempotentReplyDuplicateSkipsDLQ(t *testing.T) {
 	if n := len(dlqMsgs(t, a)); n != 0 {
 		t.Fatal("duplicate dead-lettered", n)
 	}
+}
+
+// abortFails is a store whose Abort always fails.
+type abortFails struct{ IdempotencyStore }
+
+func (abortFails) Abort(context.Context, string) error { return errors.New("store down") }
+
+func TestIdempotentAbortFailureEmits(t *testing.T) {
+	got := make(chan AsyncErrorEvent, 1)
+	log := &sink{Logger: slog.New(slog.DiscardHandler), handler: "h", ev: &events{asyncError: []func(AsyncErrorEvent){func(e AsyncErrorEvent) { got <- e }}}}
+	h := Idempotent(abortFails{NewMemoryStore()}, WithIdempotencyKey(func(*RawMsg) string { return "k" }))(
+		func(context.Context, *RawMsg) error { return errors.New("handler failed") })
+	if err := h(withSink(context.Background(), log), &RawMsg{Subject: "s"}); err == nil || err.Error() != "handler failed" {
+		t.Fatalf("err = %v, want the handler error", err)
+	}
+	e := recv(t, got)
+	if e.Handler != "h" || e.Subject != "s" || e.Err.Error() != "idempotency abort: store down" {
+		t.Fatalf("event = %+v", e)
+	}
+}
+
+func TestIdempotentManualAckDuplicateAckFailureEmits(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	setupStream(t, a)
+	// Acking before Idempotent makes the worker's own ack of the duplicate fail.
+	a.Use(func(next Handler) Handler {
+		return func(ctx context.Context, m *RawMsg) error {
+			_ = jsMsgFrom(ctx).Ack()
+			return next(ctx, m)
+		}
+	}, Idempotent(NewMemoryStore(), WithIdempotencyKey(func(*RawMsg) string { return "same" })))
+	a.Consume("ORDERS", "billing", Typed(nopOrder), WithManualAck())
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.a", order{ID: "1"})
+	_, _ = a.PublishJS(context.Background(), "orders.b", order{ID: "1"})
+	waitFor(t, func() bool {
+		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
+			return e.Handler == "ORDERS/billing" && e.Subject == "orders.b" && strings.HasPrefix(e.Err.Error(), "ack: ")
+		})
+	})
 }

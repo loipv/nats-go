@@ -2,9 +2,13 @@ package nats
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestAutoInProgressPreventsRedelivery(t *testing.T) {
@@ -23,5 +27,27 @@ func TestAutoInProgressPreventsRedelivery(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	if calls.Load() != 1 || delivered(t, a, "billing") != 1 {
 		t.Fatal(calls.Load(), delivered(t, a, "billing"))
+	}
+}
+
+// inProgressFails is a message whose InProgress always fails.
+type inProgressFails struct{ jetstream.Msg }
+
+func (inProgressFails) Subject() string   { return "s" }
+func (inProgressFails) InProgress() error { return errors.New("gone") }
+
+func TestKeepAliveFailureEmits(t *testing.T) {
+	got := make(chan AsyncErrorEvent, 1)
+	log := &sink{Logger: slog.New(slog.DiscardHandler), handler: "h", ev: &events{asyncError: []func(AsyncErrorEvent){func(e AsyncErrorEvent) {
+		select {
+		case got <- e:
+		default:
+		}
+	}}}}
+	stop := keepAlive([]jetstream.Msg{inProgressFails{}}, time.Millisecond, log)
+	defer stop()
+	e := recv(t, got)
+	if e.Handler != "h" || e.Subject != "s" || e.Err.Error() != "in-progress: gone" {
+		t.Fatalf("event = %+v", e)
 	}
 }

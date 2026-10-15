@@ -54,13 +54,57 @@ func TestFireOrderAndPanic(t *testing.T) {
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("got %v, want [1 2]", got)
 	}
-	if !strings.Contains(buf.String(), "nats: event callback panicked") {
-		t.Fatalf("log = %q, want panic message", buf.String())
+	for _, want := range []string{"level=ERROR", "nats: event callback panicked", "panic=boom", "stack="} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("log = %q, want %q", buf.String(), want)
+		}
 	}
 }
 
 func TestEventOptionsAppend(t *testing.T) {
-	a, err := New(WithOnClosed(func() {}), WithOnClosed(func() {}))
+	lens := func(e events) map[string]int {
+		return map[string]int{
+			"retry": len(e.retry), "failed": len(e.failed), "deadLettered": len(e.deadLettered),
+			"deadLetterFailed": len(e.deadLetterFailed), "restarting": len(e.restarting),
+			"restarted": len(e.restarted), "stopped": len(e.stopped), "disconnected": len(e.disconnected),
+			"reconnected": len(e.reconnected), "closed": len(e.closed), "asyncError": len(e.asyncError),
+		}
+	}
+	msg, hnd, nop := func(MsgEvent) {}, func(HandlerEvent) {}, func() {}
+	cases := []struct {
+		field string
+		opt   Option
+	}{
+		{"retry", WithOnRetry(msg)},
+		{"failed", WithOnFailed(msg)},
+		{"deadLettered", WithOnDeadLettered(msg)},
+		{"deadLetterFailed", WithOnDeadLetterFailed(msg)},
+		{"restarting", WithOnHandlerRestarting(hnd)},
+		{"restarted", WithOnHandlerRestarted(hnd)},
+		{"stopped", WithOnHandlerStopped(hnd)},
+		{"disconnected", WithOnDisconnected(func(error) {})},
+		{"reconnected", WithOnReconnected(nop)},
+		{"closed", WithOnClosed(nop)},
+		{"asyncError", WithOnAsyncError(func(AsyncErrorEvent) {})},
+	}
+	for _, c := range cases {
+		t.Run(c.field, func(t *testing.T) {
+			a, err := New(c.opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for field, n := range lens(a.opts.events) {
+				want := 0
+				if field == c.field {
+					want = 1
+				}
+				if n != want {
+					t.Errorf("len(%s) = %d, want %d", field, n, want)
+				}
+			}
+		})
+	}
+	a, err := New(WithOnClosed(nop), WithOnClosed(nop))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +150,7 @@ func TestEventConsumeRetryThenDeadLettered(t *testing.T) {
 			t.Fatalf("retry %d = %+v", i, e)
 		}
 	}
-	if d := dead()[0]; d.Attempt != 3 || d.Handler != "ORDERS/billing" || d.Err == nil || d.Msg == nil {
+	if d := dead()[0]; d.Attempt != 3 || d.Handler != "ORDERS/billing" || d.Err == nil || d.Err.Error() != "db down" || d.Msg == nil {
 		t.Fatalf("dead-lettered = %+v", d)
 	}
 }
@@ -141,10 +185,10 @@ func TestEventSubscribeRetryThenFailed(t *testing.T) {
 	_ = a.Conn().Publish("s", nil)
 	waitFor(t, func() bool { return len(failed()) == 1 })
 	rs := retries()
-	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "s" {
+	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "s" || rs[0].Subject != "s" || rs[0].Err == nil || rs[0].Err.Error() != "nope" || rs[0].Msg == nil {
 		t.Fatalf("retries = %+v", rs)
 	}
-	if e := failed()[0]; e.Attempt != 2 || e.Handler != "s" {
+	if e := failed()[0]; e.Attempt != 2 || e.Handler != "s" || e.Subject != "s" || e.Err == nil || e.Err.Error() != "nope" || e.Msg == nil {
 		t.Fatalf("failed = %+v", e)
 	}
 }
@@ -163,6 +207,9 @@ func TestEventDeadLetterFailed(t *testing.T) {
 	_ = a.Conn().Publish("s", nil)
 	waitFor(t, func() bool { return len(dlf()) == 1 })
 	e := dlf()[0]
+	if e.Attempt != 1 || e.Handler != "s" {
+		t.Fatalf("event = %+v", e)
+	}
 	if !errors.Is(e.Err, handlerErr) || e.Err.Error() == handlerErr.Error() {
 		t.Fatalf("Err = %v, want handler error joined with the DLQ error", e.Err)
 	}
@@ -294,8 +341,9 @@ func TestEventReconnected(t *testing.T) {
 	opts.StoreDir = t.TempDir()
 	s := natstest.RunServer(&opts)
 	opts.Port = s.Addr().(*net.TCPAddr).Port
-	reconnected := make(chan struct{}, 1)
-	a := newApp(t, s, WithNATSOptions(natsio.ReconnectWait(50*time.Millisecond)),
+	reconnected, userReconnected := make(chan struct{}, 1), make(chan struct{}, 1)
+	a := newApp(t, s, WithNATSOptions(natsio.ReconnectWait(50*time.Millisecond),
+		natsio.ReconnectHandler(func(*natsio.Conn) { userReconnected <- struct{}{} })),
 		WithOnReconnected(func() { reconnected <- struct{}{} }))
 	start(t, a)
 	s.Shutdown()
@@ -303,13 +351,12 @@ func TestEventReconnected(t *testing.T) {
 	s2 := natstest.RunServer(&opts)
 	t.Cleanup(s2.Shutdown)
 	recv(t, reconnected)
+	recv(t, userReconnected)
 }
 
-func TestEventConnAsyncError(t *testing.T) {
-	s := runServer(t)
-	onErr, got := collect[AsyncErrorEvent]()
-	a := newApp(t, s, WithOnAsyncError(onErr))
-	start(t, a)
+// slowConsumer makes nats.go report a slow consumer on subject "slow".
+func slowConsumer(t *testing.T, a *App) {
+	t.Helper()
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
 	sub, err := a.Conn().Subscribe("slow", func(*natsio.Msg) { <-block })
@@ -321,6 +368,41 @@ func TestEventConnAsyncError(t *testing.T) {
 		_ = a.Conn().Publish("slow", []byte("x"))
 	}
 	_ = a.Conn().Flush()
+}
+
+func TestEventConnAsyncErrorChainsUserErrorHandler(t *testing.T) {
+	s := runServer(t)
+	user := make(chan struct{}, 1)
+	onErr, got := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr), WithNATSOptions(natsio.ErrorHandler(func(_ *natsio.Conn, _ *natsio.Subscription, err error) {
+		if errors.Is(err, natsio.ErrSlowConsumer) {
+			select {
+			case user <- struct{}{}:
+			default:
+			}
+		}
+	})))
+	start(t, a)
+	slowConsumer(t, a)
+	recv(t, user)
+	waitFor(t, func() bool { return len(got()) > 0 })
+}
+
+func TestEventConnAsyncErrorLoggedWithoutUserHandler(t *testing.T) {
+	s := runServer(t)
+	var buf syncBuf
+	a := newApp(t, s, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	start(t, a)
+	slowConsumer(t, a)
+	waitFor(t, func() bool { return strings.Contains(buf.String(), "nats: connection error") })
+}
+
+func TestEventConnAsyncError(t *testing.T) {
+	s := runServer(t)
+	onErr, got := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	start(t, a)
+	slowConsumer(t, a)
 	waitFor(t, func() bool { return len(got()) > 0 })
 	e := got()[0]
 	if e.Subject != "slow" || !errors.Is(e.Err, natsio.ErrSlowConsumer) || !strings.HasPrefix(e.Err.Error(), "conn: ") {
@@ -431,4 +513,118 @@ func TestShutdownWithNoCallbacksAfterClientClose(t *testing.T) {
 		t.Fatalf("Shutdown = %v, want nil", err)
 	}
 	recv(t, closed)
+}
+
+func TestEventSubscribeDeadLettered(t *testing.T) {
+	s := runServer(t)
+	onDLQ, dead := collect[MsgEvent]()
+	a := newApp(t, s, WithOnDeadLettered(onDLQ))
+	setupDLQ(t, a)
+	a.Subscribe("s", Typed(func(context.Context, *Msg[[]byte]) error { return errors.New("nope") }),
+		WithMaxAttempts(2), fast, WithDLQ("dlq.s"))
+	start(t, a)
+	_ = a.Conn().Publish("s", nil)
+	waitFor(t, func() bool { return len(dead()) == 1 })
+	if e := dead()[0]; e.Handler != "s" || e.Subject != "s" || e.Attempt != 2 || e.Err == nil || e.Err.Error() != "nope" || e.Msg == nil {
+		t.Fatalf("dead-lettered = %+v", e)
+	}
+}
+
+func TestEventConsumeDeadLetterFailed(t *testing.T) {
+	s := runServer(t)
+	onDLF, dlf := collect[MsgEvent]()
+	a := newApp(t, s, WithOnDeadLetterFailed(onDLF))
+	setupStream(t, a)
+	setupDLQ(t, a)
+	handlerErr := Terminal(errors.New("bad"))
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { return handlerErr }), fast, WithDLQ("dlq.orders"))
+	start(t, a)
+	if err := a.JetStream().DeleteStream(context.Background(), "DLQ"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return len(dlf()) > 0 })
+	e := dlf()[0]
+	if e.Handler != "ORDERS/billing" || e.Subject != "orders.x" || e.Attempt != 1 || !errors.Is(e.Err, handlerErr) || e.Err.Error() == handlerErr.Error() {
+		t.Fatalf("event = %+v", e)
+	}
+}
+
+func TestEventReplyEncodeFailure(t *testing.T) {
+	s := runServer(t)
+	onFailed, failed := collect[MsgEvent]()
+	a := newApp(t, s, WithOnFailed(onFailed))
+	// The JSON codec cannot encode a channel.
+	a.SubscribeReply("enc", TypedReply(func(context.Context, *Msg[[]byte]) (chan int, error) { return make(chan int), nil }))
+	start(t, a)
+	_, _ = a.Conn().Request("enc", nil, time.Second)
+	waitFor(t, func() bool { return len(failed()) == 1 })
+	if e := failed()[0]; e.Handler != "enc" || e.Subject != "enc" || e.Attempt != 0 || e.Err == nil || !strings.Contains(e.Err.Error(), "encode response") {
+		t.Fatalf("failed = %+v", e)
+	}
+}
+
+func TestEventConsumeBatchRetryThenDeadLettered(t *testing.T) {
+	s := runServer(t)
+	onRetry, retries := collect[MsgEvent]()
+	onDLQ, dead := collect[MsgEvent]()
+	a := newApp(t, s, WithOnRetry(onRetry), WithOnDeadLettered(onDLQ))
+	setupStream(t, a)
+	setupDLQ(t, a)
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error {
+		return errors.New("db down")
+	}), WithBatchWait(100*time.Millisecond), WithMaxAttempts(2), fast, WithDLQ("dlq.orders"))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return len(dead()) == 1 })
+	rs := retries()
+	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "ORDERS/billing" || rs[0].Subject != "orders.x" {
+		t.Fatalf("retries = %+v", rs)
+	}
+	if d := dead()[0]; d.Attempt != 2 || d.Handler != "ORDERS/billing" || d.Err == nil || d.Err.Error() != "db down" {
+		t.Fatalf("dead-lettered = %+v", d)
+	}
+}
+
+func TestEventConsumeOrderedRetry(t *testing.T) {
+	s := runServer(t)
+	onRetry, retries := collect[MsgEvent]()
+	onFailed, failed := collect[MsgEvent]()
+	a := newApp(t, s, WithOnRetry(onRetry), WithOnFailed(onFailed))
+	setupStream(t, a)
+	a.ConsumeOrdered("ORDERS", Typed(func(context.Context, *Msg[order]) error { return errors.New("nope") }),
+		WithMaxAttempts(2), fast)
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return len(failed()) == 1 })
+	rs := retries()
+	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "ORDERS (ordered)" || rs[0].Subject != "orders.x" || rs[0].Err == nil || rs[0].Err.Error() != "nope" {
+		t.Fatalf("retries = %+v", rs)
+	}
+	if e := failed()[0]; e.Attempt != 2 || e.Handler != "ORDERS (ordered)" {
+		t.Fatalf("failed = %+v", e)
+	}
+}
+
+func TestEventHandlerStoppedCallbackMayCallApp(t *testing.T) {
+	s := runServer(t)
+	var a *App
+	called := make(chan error, 1)
+	a = newApp(t, s, WithOnHandlerStopped(func(HandlerEvent) {
+		_ = a.Health()
+		select {
+		case called <- a.Publish(context.Background(), "x", nil):
+		default:
+		}
+	}))
+	a.Subscribe("s", Typed(nopOrder))
+	start(t, a)
+	done := make(chan error, 1)
+	go func() { done <- a.Shutdown(context.Background()) }()
+	if err := recv(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if err := recv(t, called); err != nil {
+		t.Fatalf("Publish from OnHandlerStopped: %v", err)
+	}
 }

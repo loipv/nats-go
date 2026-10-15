@@ -3,10 +3,13 @@ package nats
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/micro"
 )
 
@@ -172,4 +175,20 @@ func TestSubscribePanicWithoutRecoverDoesNotCrash(t *testing.T) {
 	if recv(t, got) != "ok" {
 		t.Fatal()
 	}
+}
+
+func TestReplyRespondFailureEmits(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	// A response over the server's max payload cannot be sent.
+	big := make([]byte, 2<<20)
+	a.SubscribeReply("big", TypedReply(func(context.Context, *Msg[[]byte]) ([]byte, error) { return big, nil }))
+	start(t, a)
+	_ = a.Conn().PublishRequest("big", "reply.big", nil)
+	waitFor(t, func() bool {
+		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
+			return e.Handler == "big" && e.Subject == "big" && strings.HasPrefix(e.Err.Error(), "respond: ") && errors.Is(e.Err, natsio.ErrMaxPayload)
+		})
+	})
 }
