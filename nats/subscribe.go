@@ -12,7 +12,7 @@ import (
 )
 
 // Subscribe registers h for messages on subject. Wildcards (* and >) and
-// Queue are supported. Errors returned by fn are logged.
+// Queue are supported. Errors returned by the handler are logged.
 //
 // Core NATS never redelivers, so a failed message is not retried by default.
 // MaxAttempts, WithBackoff and DLQ retry it in the worker, waiting for the

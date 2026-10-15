@@ -44,16 +44,18 @@
 // service endpoints, TypedBatch for ConsumeBatch. T is inferred from the
 // handler:
 //
-//		app.Reply("billing.get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetInvoice]) (Invoice, error) {
-//			return load(ctx, m.Data.ID)
-//		}))
+//	app.Reply("billing.get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetInvoice]) (Invoice, error) {
+//		return load(ctx, m.Data.ID)
+//	}))
 //
-//	  - Subscribe handles core NATS messages, with wildcards and Queue groups.
-//	  - Reply answers requests; the returned value is encoded and sent back.
-//	  - Consume handles a durable JetStream consumer; pull and push consumers
-//	    are detected at Start.
-//	  - ConsumeOrdered reads a stream in order through an ephemeral ordered
-//	    consumer; it accepts only Concurrency(1) so order is kept.
+// The registration methods:
+//
+//   - Subscribe handles core NATS messages, with wildcards and Queue groups.
+//   - Reply answers requests; the returned value is encoded and sent back.
+//   - Consume handles a durable JetStream consumer; pull and push consumers
+//     are detected at Start.
+//   - ConsumeOrdered reads a stream in order through an ephemeral ordered
+//     consumer; it accepts only Concurrency(1) so order is kept.
 //
 // The error a handler returns decides what happens to the message:
 //

@@ -17,7 +17,7 @@
 // Handle is one-way: it never replies to a request. Use App.Reply for
 // request/reply. A message whose attributes are invalid (missing ce-id,
 // ce-source, ce-type or ce-specversion, an unsupported spec version or a bad
-// ce-time) fails with nats.Terminal and fn is not called; with the DLQ option
+// ce-time) fails with nats.Terminal and the handler is not called; with the DLQ option
 // it is dead-lettered. Handle accepts the options of App.Subscribe.
 //
 // Extra headers go through WithHeader; the ce-* and Content-Type headers set
