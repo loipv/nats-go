@@ -18,8 +18,13 @@ import (
 type App struct {
 	opts options
 
-	mu          sync.Mutex
-	starting    bool
+	mu       sync.Mutex
+	starting bool
+	// startDone is closed when the Start that set starting returns.
+	startDone chan struct{}
+	// abortStart is set by a Shutdown that gave up waiting for Start; that
+	// Start then tears itself down instead of starting.
+	abortStart  bool
 	started     bool
 	regErrs     []error
 	regs        []registration
@@ -175,13 +180,21 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	// The lock is not held while connecting so Health answers meanwhile;
 	// starting rejects registrations and a second Start.
-	a.starting = true
+	a.starting, a.startDone = true, make(chan struct{})
 	a.mu.Unlock()
 
 	runners, err := a.connectAndStart(ctx)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.starting = false
+	if err == nil && a.abortStart {
+		nc := a.nc
+		a.mu.Unlock()
+		a.abandon(ctx, nc, runners)
+		err = errors.New("nats: start: cancelled by Shutdown")
+		a.mu.Lock()
+	}
+	a.starting, a.abortStart = false, false
+	close(a.startDone)
 	if err != nil {
 		a.nc, a.js, a.closed = nil, nil, nil
 		return err
@@ -216,10 +229,7 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
 	var runners []runner
 	fail := func(err error) ([]runner, error) {
-		a.cancelBase()
-		_ = stopRunners(ctx, runners)
-		a.pubOpen.Store(false)
-		nc.Close()
+		a.abandon(ctx, nc, runners)
 		return nil, err
 	}
 
@@ -254,6 +264,15 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	return runners, nil
 }
 
+// abandon undoes a Start that failed or was cancelled after its handlers
+// began starting.
+func (a *App) abandon(ctx context.Context, nc *natsio.Conn, runners []runner) {
+	a.cancelBase()
+	_ = stopRunners(ctx, runners)
+	a.pubOpen.Store(false)
+	nc.Close()
+}
+
 func stopRunners(ctx context.Context, runners []runner) error {
 	errs := make([]error, len(runners))
 	var wg sync.WaitGroup
@@ -267,9 +286,27 @@ func stopRunners(ctx context.Context, runners []runner) error {
 // Shutdown stops intake on every handler, waits for in-flight handlers and
 // drains the connection, bounded by ctx. It is a no-op before Start or after
 // a completed Shutdown. A Shutdown called while another is in progress waits
-// for it, bounded by its own ctx, and returns the same error.
+// for it, bounded by its own ctx, and returns the same error. A Shutdown
+// called during Start waits for Start, bounded by ctx, then shuts down what
+// it started; if ctx ends first, that Start is cancelled and returns an error.
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
+	if a.starting {
+		done := a.startDone
+		a.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+		a.mu.Lock()
+		if a.starting {
+			a.abortStart = true
+			a.mu.Unlock()
+			return fmt.Errorf("nats: shutdown: %w", ctx.Err())
+		}
+		// Start finished; if ctx has also ended, the shutdown below closes
+		// the connection at once and reports ctx.Err().
+	}
 	if !a.started {
 		a.mu.Unlock()
 		return nil

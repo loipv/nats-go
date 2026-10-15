@@ -145,3 +145,44 @@ func TestConcurrentStart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 }
+
+func TestShutdownDuringStart(t *testing.T) {
+	a := newApp(t, runServer(t), WithNATSOptions(natsio.SetCustomDialer(slowDialer{500 * time.Millisecond})))
+	started := make(chan error, 1)
+	go func() { started <- a.Start(context.Background()) }()
+	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("Shutdown returned before Start")
+	}
+	if a.Health().Ready || !a.Conn().IsClosed() {
+		t.Fatal("app must be shut down")
+	}
+}
+
+func TestShutdownDuringStartDeadline(t *testing.T) {
+	a := newApp(t, runServer(t), WithNATSOptions(natsio.SetCustomDialer(slowDialer{500 * time.Millisecond})))
+	started := make(chan error, 1)
+	go func() { started <- a.Start(context.Background()) }()
+	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := a.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if err := recv(t, started); err == nil {
+		t.Fatal("Start must fail after a cancelling Shutdown")
+	}
+	if a.Health().Ready || a.Conn() != nil {
+		t.Fatal("app must not be running")
+	}
+}
