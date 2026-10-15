@@ -248,9 +248,8 @@ func (a *App) Start(ctx context.Context) error {
 // connectAndStart does the work of Start without holding a.mu. On failure
 // it closes the connection and stops whatever it started.
 func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
-	// ponytail: overrides a ClosedHandler passed via WithNATSOptions; chain it if someone needs both.
 	closed := make(chan struct{})
-	natsOpts := append(slices.Clone(a.opts.natsOpts), natsio.ClosedHandler(func(*natsio.Conn) { close(closed) }))
+	natsOpts := append(slices.Clone(a.opts.natsOpts), a.connCallbacks(closed)...)
 	nc, err := natsio.Connect(a.opts.url, natsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats: connect: %w", err)

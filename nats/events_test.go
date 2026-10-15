@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	natstest "github.com/nats-io/nats-server/v2/test"
+	natsio "github.com/nats-io/nats.go"
 )
 
 func TestEventOptionRejectsNil(t *testing.T) {
@@ -226,4 +230,109 @@ func TestEventHandlerStopped(t *testing.T) {
 	if !slices.Equal(names, []string{"ORDERS/billing", "s"}) {
 		t.Fatalf("stopped = %v", names)
 	}
+}
+
+func TestEventConnectionChainsUserCallbacks(t *testing.T) {
+	s := runServer(t)
+	var mu sync.Mutex
+	got := map[string]bool{}
+	mark := func(k string) { mu.Lock(); got[k] = true; mu.Unlock() }
+	a := newApp(t, s,
+		WithNATSOptions(
+			natsio.ClosedHandler(func(*natsio.Conn) { mark("userClosed") }),
+			natsio.DisconnectErrHandler(func(*natsio.Conn, error) { mark("userDisc") })),
+		WithOnClosed(func() { mark("closed") }),
+		WithOnDisconnected(func(error) { mark("disc") }))
+	start(t, a)
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, k := range []string{"userClosed", "userDisc", "closed", "disc"} {
+		if !got[k] {
+			t.Errorf("%s not called (got %v)", k, got)
+		}
+	}
+}
+
+func TestEventConnectionChainsDeprecatedDisconnectedCB(t *testing.T) {
+	s := runServer(t)
+	user := make(chan struct{}, 1)
+	a := newApp(t, s, WithNATSOptions(natsio.DisconnectHandler(func(*natsio.Conn) { user <- struct{}{} })))
+	start(t, a)
+	_ = a.Shutdown(context.Background())
+	recv(t, user)
+}
+
+func TestRunReturnsWithUserClosedHandler(t *testing.T) {
+	s := runServer(t)
+	userClosed := make(chan struct{}, 1)
+	a := newApp(t, s, WithNATSOptions(natsio.MaxReconnects(0),
+		natsio.ClosedHandler(func(*natsio.Conn) { userClosed <- struct{}{} })))
+	done := make(chan error, 1)
+	go func() { done <- a.Run(context.Background()) }()
+	waitFor(t, func() bool { return a.Conn() != nil })
+	s.Shutdown()
+	select {
+	case err := <-done:
+		if !errors.Is(err, natsio.ErrConnectionClosed) {
+			t.Fatalf("Run = %v, want ErrConnectionClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	recv(t, userClosed)
+}
+
+func TestEventReconnected(t *testing.T) {
+	opts := natstest.DefaultTestOptions
+	opts.Port = -1
+	opts.JetStream = true
+	opts.StoreDir = t.TempDir()
+	s := natstest.RunServer(&opts)
+	opts.Port = s.Addr().(*net.TCPAddr).Port
+	reconnected := make(chan struct{}, 1)
+	a := newApp(t, s, WithNATSOptions(natsio.ReconnectWait(50*time.Millisecond)),
+		WithOnReconnected(func() { reconnected <- struct{}{} }))
+	start(t, a)
+	s.Shutdown()
+	s.WaitForShutdown()
+	s2 := natstest.RunServer(&opts)
+	t.Cleanup(s2.Shutdown)
+	recv(t, reconnected)
+}
+
+func TestEventConnAsyncError(t *testing.T) {
+	s := runServer(t)
+	onErr, got := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	start(t, a)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	sub, err := a.Conn().Subscribe("slow", func(*natsio.Msg) { <-block })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = sub.SetPendingLimits(1, -1)
+	for range 10 {
+		_ = a.Conn().Publish("slow", []byte("x"))
+	}
+	_ = a.Conn().Flush()
+	waitFor(t, func() bool { return len(got()) > 0 })
+	e := got()[0]
+	if e.Subject != "slow" || !errors.Is(e.Err, natsio.ErrSlowConsumer) || !strings.HasPrefix(e.Err.Error(), "conn: ") {
+		t.Fatalf("event = %+v", e)
+	}
+}
+
+func TestEventConnCallbackPanicRecovered(t *testing.T) {
+	s := runServer(t)
+	recorded := make(chan struct{}, 1)
+	a := newApp(t, s,
+		WithOnDisconnected(func(error) { panic("boom") }),
+		WithOnDisconnected(func(error) { recorded <- struct{}{} }))
+	start(t, a)
+	_ = a.Shutdown(context.Background())
+	recv(t, recorded)
 }

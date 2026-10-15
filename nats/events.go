@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+
+	natsio "github.com/nats-io/nats.go"
 )
 
 // MsgEvent describes a message the library retried, gave up on or dead-lettered.
@@ -112,6 +114,55 @@ func (s *sink) restarting(err error) {
 func (s *sink) restarted() {
 	if s.ev != nil {
 		fire(s.Logger, s.ev.restarted, s.handlerEvent(nil))
+	}
+}
+
+// connCallbacks returns the nats.go options that emit the connection events
+// and close(closed). They replace the user's callbacks from WithNATSOptions,
+// so each wrapper calls the user's callback first. closed is closed after the
+// closed events fired, so Shutdown returns after them.
+func (a *App) connCallbacks(closed chan struct{}) []natsio.Option {
+	var user natsio.Options
+	for _, opt := range a.opts.natsOpts {
+		_ = opt(&user) // a failing option makes Connect fail with the same error
+	}
+	log, ev := a.opts.logger, &a.opts.events
+	return []natsio.Option{
+		natsio.DisconnectErrHandler(func(nc *natsio.Conn, err error) {
+			// nats.go skips DisconnectedCB when DisconnectedErrCB is set.
+			if user.DisconnectedErrCB != nil {
+				user.DisconnectedErrCB(nc, err)
+			} else if user.DisconnectedCB != nil {
+				user.DisconnectedCB(nc)
+			}
+			fire(log, ev.disconnected, err)
+		}),
+		natsio.ReconnectHandler(func(nc *natsio.Conn) {
+			if user.ReconnectedCB != nil {
+				user.ReconnectedCB(nc)
+			}
+			fire(log, ev.reconnected, struct{}{})
+		}),
+		natsio.ClosedHandler(func(nc *natsio.Conn) {
+			defer close(closed)
+			if user.ClosedCB != nil {
+				user.ClosedCB(nc)
+			}
+			fire(log, ev.closed, struct{}{})
+		}),
+		natsio.ErrorHandler(func(nc *natsio.Conn, sub *natsio.Subscription, err error) {
+			e := AsyncErrorEvent{Err: fmt.Errorf("conn: %w", err)}
+			if sub != nil {
+				e.Subject = sub.Subject
+			}
+			if user.AsyncErrorCB != nil {
+				user.AsyncErrorCB(nc, sub, err)
+			} else {
+				// Our handler replaces nats.go's default, which prints to stderr.
+				log.Error("nats: connection error", "subject", e.Subject, "error", err)
+			}
+			fire(log, ev.asyncError, e)
+		}),
 	}
 }
 
