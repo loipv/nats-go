@@ -172,6 +172,9 @@ func TestConsumeStoppedWhenConsumerDeleted(t *testing.T) {
 	setupStream(t, a)
 	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { return nil }))
 	start(t, a)
+	// The server drops a pull request that is not waiting yet when the consumer
+	// is deleted, so detection would take a heartbeat timeout.
+	waitFor(t, func() bool { return consumerInfo(t, a, "billing").NumWaiting >= 1 })
 	if err := a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing"); err != nil {
 		t.Fatal(err)
 	}

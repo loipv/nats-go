@@ -120,6 +120,9 @@ func TestShutdownDuringRestartBackoff(t *testing.T) { // Review Focus #5
 	a := newApp(t, s, WithRestartBackoff(func(int) time.Duration { return time.Hour }))
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
+	// The server drops a pull request that is not waiting yet when the consumer
+	// is deleted, so detection would take a heartbeat timeout.
+	waitFor(t, func() bool { return consumerInfo(t, a, "billing").NumWaiting >= 1 })
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { return a.Health().Handlers[0].State == "restarting" })
 	begin := time.Now()

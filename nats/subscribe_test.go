@@ -106,6 +106,10 @@ func TestPanicSendsInternalError(t *testing.T) {
 		"reply with Recover": func(a *App) { a.Use(Recover()); a.Reply("boom", boom) },
 		"reply":              func(a *App) { a.Reply("boom", boom) },
 		"endpoint":           func(a *App) { a.Service(micro.Config{Name: "svc", Version: "1.0.0"}).Endpoint("boom", boom) },
+		"endpoint with Recover": func(a *App) {
+			a.Use(Recover())
+			a.Service(micro.Config{Name: "svc", Version: "1.0.0"}).Endpoint("boom", boom)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := runServer(t)
