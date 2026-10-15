@@ -18,8 +18,8 @@ type fakeJSMsg struct {
 	delay  time.Duration
 }
 
-func (f *fakeJSMsg) Ack() error  { f.called = "ack"; return nil }
-func (f *fakeJSMsg) Term() error { f.called = "term"; return nil }
+func (f *fakeJSMsg) Ack() error                  { f.called = "ack"; return nil }
+func (f *fakeJSMsg) TermWithReason(string) error { f.called = "term"; return nil }
 func (f *fakeJSMsg) NakWithDelay(d time.Duration) error {
 	f.called, f.delay = "nak", d
 	return nil

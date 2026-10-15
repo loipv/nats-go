@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // IdempotencyStore records which message keys were processed. Begin claims a
@@ -48,7 +50,7 @@ func WithDoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig)
 // It panics if store is nil or a TTL is not positive.
 func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 	c := idemConfig{
-		key:      func(m *RawMsg) string { return m.Header.Get("Nats-Msg-Id") },
+		key:      func(m *RawMsg) string { return m.Header.Get(jetstream.MsgIDHeader) },
 		claimTTL: time.Minute,
 		doneTTL:  24 * time.Hour,
 	}

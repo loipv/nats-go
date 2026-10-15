@@ -101,7 +101,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | `nats.Terminal(err)`, decode or validation failure | `Term` (never redelivered) | no | immediately, if `WithDLQ(subject)` is set | `Nats-Service-Error`, code 400 |
 | panic | handled as any other error | as above | as above | `Nats-Service-Error: internal error`, code 500; the panic and stack are only logged |
 
-Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `Reply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
+Every `Term` carries the first line of the error as its reason, reported by the server in the `$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED` advisory. Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `Reply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
 
 With `nats.WithManualAck()` the handler acks itself via `m.Ack()`, `m.Nak()`, `m.NakWithDelay(d)`, `m.Term()` or `m.InProgress()`.
 
@@ -212,6 +212,8 @@ ack, err := atomicbatch.Publish(ctx, app, []nats.BatchMsg{
 ```
 
 The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. A `WithExpectLastSeq` option only makes sense on the first message of the batch.
+
+Both batch calls reject `nats.WithJSPublishOpts`, which passes any other `jetstream.PublishOpt` (such as `jetstream.WithMsgTTL`) to `PublishJS` only: those options are not headers, so they cannot travel with a built message.
 
 ### OpenTelemetry
 

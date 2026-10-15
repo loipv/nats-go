@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go/micro"
 )
 
 // PubOption configures one publish.
@@ -20,6 +21,8 @@ type pubConfig struct {
 	// message keeps them on any send path.
 	jsHeaders map[string]string
 	jsOnly    []string
+	// jsPubOpts cannot be turned into headers, so only PublishJS applies them.
+	jsPubOpts []jetstream.PublishOpt
 }
 
 // WithHeader sets headers on the published message.
@@ -57,6 +60,17 @@ func WithExpectLastSubjectSeq(seq uint64) PubOption {
 	return jsOption("WithExpectLastSubjectSeq", jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(seq, 10))
 }
 
+// WithJSPublishOpts passes jetstream publish options straight to nats.go, for
+// anything this package does not wrap (such as jetstream.WithMsgTTL or
+// jetstream.WithExpectLastMsgID). PublishJS only: they are not headers, so
+// Message, PublishJSBatch and atomic batches reject them too.
+func WithJSPublishOpts(opts ...jetstream.PublishOpt) PubOption {
+	return func(c *pubConfig) {
+		c.jsPubOpts = append(c.jsPubOpts, opts...)
+		c.jsOnly = append(c.jsOnly, "WithJSPublishOpts")
+	}
+}
+
 // build encodes v and applies opts without checking the app state or the
 // JetStream-only options.
 func (a *App) build(subject string, v any, opts []PubOption) (*RawMsg, pubConfig, error) {
@@ -83,9 +97,13 @@ func (a *App) build(subject string, v any, opts []PubOption) (*RawMsg, pubConfig
 // (WithMsgID, WithExpectStream, WithExpectLastSeq, WithExpectLastSubjectSeq)
 // as headers. Publish rejects those JetStream options, so a message built with
 // them is only for PublishJS or a batch. It needs no connection and is meant
-// for integrations such as atomic batches.
+// for integrations such as atomic batches. WithJSPublishOpts is rejected: its
+// options cannot travel with the message.
 func (a *App) Message(subject string, v any, opts ...PubOption) (*RawMsg, error) {
-	m, _, err := a.build(subject, v, opts)
+	m, c, err := a.build(subject, v, opts)
+	if err == nil && len(c.jsPubOpts) > 0 {
+		return nil, fmt.Errorf("nats: option WithJSPublishOpts requires PublishJS")
+	}
 	return m, err
 }
 
@@ -153,8 +171,8 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 	if reply == nil {
 		return nil, fmt.Errorf("nats: request %q: no reply (a publish middleware did not call next)", subject)
 	}
-	if desc := reply.Header.Get("Nats-Service-Error"); desc != "" {
-		code, _ := strconv.Atoi(reply.Header.Get("Nats-Service-Error-Code"))
+	if desc := reply.Header.Get(micro.ErrorHeader); desc != "" {
+		code, _ := strconv.Atoi(reply.Header.Get(micro.ErrorCodeHeader))
 		return nil, &ServiceError{Code: code, Description: desc}
 	}
 	switch p := out.(type) {
@@ -171,14 +189,14 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 
 // PublishJS encodes v, publishes it to JetStream and waits for the stream's ack.
 func (a *App) PublishJS(ctx context.Context, subject string, v any, opts ...PubOption) (*jetstream.PubAck, error) {
-	m, _, err := a.prepare(subject, v, opts, true)
+	m, c, err := a.prepare(subject, v, opts, true)
 	if err != nil {
 		return nil, err
 	}
 	var ack *jetstream.PubAck
 	err = a.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
 		var err error
-		ack, err = a.js.PublishMsg(ctx, m)
+		ack, err = a.js.PublishMsg(ctx, m, c.jsPubOpts...)
 		return err
 	})
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -16,10 +17,7 @@ import (
 	"github.com/loipv/nats-go/nats"
 )
 
-const (
-	scope       = "github.com/loipv/nats-go/nats/natsotel"
-	msgIDHeader = "Nats-Msg-Id"
-)
+const scope = "github.com/loipv/nats-go/nats/natsotel"
 
 // Attribute keys, following the OpenTelemetry messaging semantic conventions.
 const (
@@ -153,7 +151,7 @@ func (c *config) attrs(m *nats.RawMsg, dest, op string) []attribute.KeyValue {
 		attribute.String(keyOperationType, op),
 		attribute.Int(keyBodySize, len(m.Data)),
 	}
-	if id := m.Header.Get(msgIDHeader); id != "" {
+	if id := m.Header.Get(jetstream.MsgIDHeader); id != "" {
 		attrs = append(attrs, attribute.String(keyMessageID, id))
 	}
 	return attrs

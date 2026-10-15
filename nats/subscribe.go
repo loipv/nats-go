@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	natsio "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/micro"
 )
 
 // Subscribe registers h for messages on subject. Wildcards (* and >) and
@@ -136,11 +137,11 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 		case abandoned:
 		case err != nil:
 			// The requester gets the error even when the message went to the DLQ.
-			if err := respondError(a.nc, m.Reply, err); err != nil {
+			if err := respondError(m, err); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
 			}
 		case resp != nil:
-			if err := a.nc.Publish(m.Reply, resp); err != nil {
+			if err := m.Respond(resp); err != nil {
 				log.Error("nats: send response", "subject", m.Subject, "error", err)
 			}
 		}
@@ -199,11 +200,12 @@ func errorDescription(err error) string {
 	return firstLine(err)
 }
 
-func respondError(nc *natsio.Conn, reply string, err error) error {
-	m := natsio.NewMsg(reply)
-	m.Header.Set("Nats-Service-Error", errorDescription(err))
-	m.Header.Set("Nats-Service-Error-Code", errorCode(err))
-	return nc.PublishMsg(m)
+// respondError answers req with err in the micro error headers.
+func respondError(req *RawMsg, err error) error {
+	return req.RespondMsg(&natsio.Msg{Header: Header{
+		micro.ErrorHeader:     {errorDescription(err)},
+		micro.ErrorCodeHeader: {errorCode(err)},
+	}})
 }
 
 type coreRunner struct {

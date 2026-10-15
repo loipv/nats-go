@@ -171,6 +171,8 @@
 // App.Publish sends fire-and-forget, App.Request waits for a reply and
 // decodes it into out (a failed responder comes back as *ServiceError) and
 // App.PublishJS waits for the stream's ack, with WithMsgID for deduplication.
+// WithJSPublishOpts passes any other jetstream.PublishOpt (such as
+// jetstream.WithMsgTTL) to PublishJS.
 //
 //	var inv Invoice
 //	_, err := app.Request(ctx, "billing.get", GetInvoice{ID: "42"}, &inv)

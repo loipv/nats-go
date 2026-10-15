@@ -75,7 +75,8 @@ func (r retryConfig) exceeded(attempt int) bool {
 
 // dispose acks, naks or terms a consumed message according to the handler
 // result, publishing it to the DLQ when giving up on it. A duplicate skipped
-// by Idempotent is acked. Ack failures are only logged: the server
+// by Idempotent is acked. A term carries the first line of err as its
+// reason, which the server reports in the MSG_TERMINATED advisory. Ack failures are only logged: the server
 // redelivers the message after AckWait.
 func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err error, rc retryConfig, src dlqSource, log *slog.Logger) {
 	attempt := src.deliveries
@@ -91,14 +92,14 @@ func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err err
 		ackErr = m.NakWithDelay(rc.backoff(attempt))
 	case rc.dlq == "":
 		log.Error("nats: handler failed, message terminated", "subject", raw.Subject, "attempt", attempt, "error", err)
-		ackErr = m.Term()
+		ackErr = m.TermWithReason(firstLine(err))
 	default:
 		if perr := a.publishDLQ(ctx, rc.dlq, raw, err, src); perr != nil {
 			log.Error("nats: handler failed, DLQ publish failed, will retry", "subject", raw.Subject, "attempt", attempt, "error", err, "dlq_error", perr)
 			ackErr = m.NakWithDelay(rc.backoff(attempt))
 		} else {
 			log.Error("nats: handler failed, message sent to DLQ", "subject", raw.Subject, "attempt", attempt, "error", err, "dlq", rc.dlq)
-			ackErr = m.Term()
+			ackErr = m.TermWithReason(firstLine(err))
 		}
 	}
 	if ackErr != nil {
