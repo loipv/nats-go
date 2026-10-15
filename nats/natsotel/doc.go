@@ -21,6 +21,8 @@
 //
 // Not covered: ConsumeBatch handlers (they have no middleware) and responses
 // sent by Reply workers or micro endpoints (they bypass PublishMiddleware).
+// The "send" span of a PublishJSBatch message ends when the message is handed
+// to the client and does not see its ack result.
 //
 // Cardinality: the destination name, by default the message subject, is an
 // attribute of every span and metric. When subjects carry identifiers such as

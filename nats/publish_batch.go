@@ -39,6 +39,9 @@ func (e *PublishBatchError) Error() string {
 // stalls for up to 200ms and then fails with jetstream.ErrTooManyStalledMsgs
 // (not stored). Storage order is not strictly guaranteed: jetstream resends a
 // message after a no-responders reply, which can land it behind later ones.
+// An ack that never arrives fails with jetstream.ErrAsyncPublishTimeout after
+// 30s. A publish middleware sees each message when it is handed to the
+// client, not its ack: a natsotel "send" span does not record the ack result.
 func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream.PubAck, error) {
 	if !a.pubOpen.Load() {
 		return nil, ErrNotRunning

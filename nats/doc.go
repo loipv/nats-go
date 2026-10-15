@@ -179,9 +179,13 @@
 // App.PublishJSBatch publishes many messages to JetStream and waits for all
 // the acks together. It is not atomic: acks[i] is non-nil for every message
 // known to be stored, and the *PublishBatchError lists the others by index.
-// An entry whose error is the context's means the outcome is unknown. More
-// than about 4000 messages in flight can stall the call. For all-or-nothing
-// publishing see the atomicbatch package.
+// An entry whose error is the bare context error means the outcome is
+// unknown; once ctx is done the remaining messages are not sent and their
+// entries say "not sent". Beyond about 4000 unacknowledged messages in flight
+// a send stalls for up to 200ms and then fails with
+// jetstream.ErrTooManyStalledMsgs (definitely not stored), and an ack that
+// never arrives fails with jetstream.ErrAsyncPublishTimeout after 30s. Split
+// bigger batches. For all-or-nothing publishing see the atomicbatch package.
 //
 // Three subpackages hold the integrations with extra dependencies, so this
 // package imports none of them:

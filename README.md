@@ -196,7 +196,7 @@ if errors.As(err, &be) {
 }
 ```
 
-`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the context's means the outcome is unknown: the message may have been stored. A message that cannot be encoded fails the whole call before anything is sent. More than about 4000 messages in flight can stall the call; split bigger batches.
+`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the bare context error means the outcome is unknown: the message may have been stored. Once `ctx` is cancelled or expires no further message is sent, and those entries read `nats: batch message N not sent: ...`. A message that cannot be encoded fails the whole call before anything is sent. Beyond about 4000 unacknowledged messages in flight a send stalls for up to 200ms and then fails with `jetstream.ErrTooManyStalledMsgs` (definitely not stored), so split bigger batches; an ack that never arrives fails with `jetstream.ErrAsyncPublishTimeout` after 30s. Storage order is not strictly guaranteed: jetstream resends a message after a no-responders reply, which can land it behind later ones.
 
 For all-or-nothing publishing use `atomicbatch`:
 
@@ -224,7 +224,7 @@ app.UsePublish(natsotel.PublishMiddleware())
 The trace context travels in the message headers: a `send <subject>` producer span is the parent of the `process <subject>` consumer span, across services. Each attempt is its own span, with `messaging.nats.attempt`. The middleware records `messaging.client.operation.duration`, `messaging.client.sent.messages`, `messaging.process.duration` and `messaging.client.consumed.messages`. A message skipped by `Idempotent` is tagged `messaging.nats.duplicate` and is not counted as an error. The global providers and propagator are used unless you pass `WithTracerProvider`, `WithMeterProvider` or `WithPropagator`.
 
 - **Cardinality**: the destination name is the message subject by default, and it is a metric attribute. Subjects that contain identifiers (`orders.42.created`) create one series each. Use `natsotel.WithDestination(func(subject string) string { ... })` to map them to something bounded such as `orders.*.created`.
-- **Not covered**: `ConsumeBatch` handlers (they have no middleware) and responses sent by `Reply` workers or micro endpoints (they do not go through `PublishMiddleware`).
+- **Not covered**: `ConsumeBatch` handlers (they have no middleware) and responses sent by `Reply` workers or micro endpoints (they do not go through `PublishMiddleware`). The `send` span of a `PublishJSBatch` message ends when the message is handed to the client and does not see its ack result.
 
 ### CloudEvents
 
