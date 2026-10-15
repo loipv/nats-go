@@ -46,11 +46,11 @@ func main() {
 
 	opts := []nats.Option{
 		nats.WithURL(natsURL()),
-		nats.Name("orders-service"),
+		nats.WithName("orders-service"),
 		nats.WithShutdownTimeout(10 * time.Second),
 	}
 	if creds := os.Getenv("NATS_CREDS"); creds != "" {
-		opts = append(opts, nats.UserCredentials(creds))
+		opts = append(opts, nats.WithUserCredentials(creds))
 	}
 	app, err := nats.New(opts...)
 	if err != nil {
@@ -60,7 +60,7 @@ func main() {
 
 	app.Reply("api.orders.get", nats.TypedReply(func(_ context.Context, m *nats.Msg[GetOrder]) (Order, error) {
 		return Order{ID: m.Data.ID, Status: "shipped"}, nil
-	}), nats.Queue("orders-service"))
+	}), nats.WithQueue("orders-service"))
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", app.HealthHandler())

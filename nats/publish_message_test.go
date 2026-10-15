@@ -8,7 +8,7 @@ import (
 
 func TestMessageEncodesAndSetsJSHeaders(t *testing.T) {
 	a, _ := New() // not started: Message needs no connection
-	m, err := a.Message("orders.x", order{ID: "1"}, WithHeader(Header{"X-A": []string{"1"}}), MsgID("m-1"), ExpectLastSeq(7), ExpectStream("ORDERS"), ExpectLastSubjectSeq(3))
+	m, err := a.Message("orders.x", order{ID: "1"}, WithHeader(Header{"X-A": []string{"1"}}), WithMsgID("m-1"), WithExpectLastSeq(7), WithExpectStream("ORDERS"), WithExpectLastSubjectSeq(3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,11 +30,11 @@ func TestPublishJSExpectHeaderEnforced(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	start(t, a)
-	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, ExpectLastSeq(42)); err == nil {
+	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithExpectLastSeq(42)); err == nil {
 		t.Fatal("wrong ExpectLastSeq must be rejected by the server")
 	}
-	ack1, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("d"))
-	ack2, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("d"))
+	ack1, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("d"))
+	ack2, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("d"))
 	if !ack2.Duplicate || ack2.Sequence != ack1.Sequence {
 		t.Fatal(ack2)
 	}

@@ -39,7 +39,7 @@ func TestPublishJSBatchPartialFailure(t *testing.T) {
 	start(t, a)
 	acks, err := a.PublishJSBatch(context.Background(), []BatchMsg{
 		{Subject: "orders.x", Data: order{ID: "a"}},
-		{Subject: "orders.x", Data: order{ID: "b"}, Opts: []PubOption{ExpectLastSeq(99)}},
+		{Subject: "orders.x", Data: order{ID: "b"}, Opts: []PubOption{WithExpectLastSeq(99)}},
 		{Subject: "orders.x", Data: order{ID: "c"}},
 	})
 	var be *PublishBatchError

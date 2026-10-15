@@ -18,7 +18,7 @@ func TestChainOrder(t *testing.T) {
 	}
 	a, _ := New()
 	a.Use(mw("app1"), mw("app2"))
-	c, _ := newHandlerConfig(kindSubscribe, []HandlerOption{With(mw("h1"))})
+	c, _ := newHandlerConfig(kindSubscribe, []HandlerOption{WithMiddleware(mw("h1"))})
 	_ = a.chain(c, func(context.Context, *RawMsg) error { trace = append(trace, "fn"); return nil })(context.Background(), &RawMsg{})
 	if strings.Join(trace, ",") != "app1,app2,h1,fn" {
 		t.Fatal(trace)

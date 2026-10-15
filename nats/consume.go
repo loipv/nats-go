@@ -137,7 +137,7 @@ func (r *jsReg) check(ctx context.Context, a *App) error {
 	// attempt could reach the DLQ.
 	maxDeliver := r.info.Config.MaxDeliver
 	if rc.maxAttempts != Unlimited && maxDeliver != -1 && maxDeliver <= rc.maxAttempts {
-		return fmt.Errorf("nats: consume %s: MaxDeliver %d must exceed MaxAttempts %d", r.name(), maxDeliver, rc.maxAttempts)
+		return fmt.Errorf("nats: consume %s: MaxDeliver %d must exceed WithMaxAttempts %d", r.name(), maxDeliver, rc.maxAttempts)
 	}
 	if rc.maxAttempts == Unlimited && maxDeliver > 0 {
 		a.opts.logger.Warn("nats: consumer MaxDeliver drops messages the handler retries forever", "handler", r.name(), "max_deliver", maxDeliver)

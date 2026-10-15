@@ -35,7 +35,7 @@ func main() {
 		defer wg.Done()
 		fmt.Printf("%s: %s\n", m.Subject, m.Data.Name)
 		return nil
-	}), nats.FilterSubjects("events.eu.>"), nats.DeliverPolicy(jetstream.DeliverNewPolicy))
+	}), nats.WithFilterSubjects("events.eu.>"), nats.WithDeliverPolicy(jetstream.DeliverNewPolicy))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

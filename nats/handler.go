@@ -124,23 +124,23 @@ type handlerConfig struct {
 // or nil when the option applies to every kind.
 func allowedKinds(option string) []handlerKind {
 	switch option {
-	case "Queue":
+	case "WithQueue":
 		return []handlerKind{kindSubscribe, kindReply}
-	case "Concurrency":
+	case "WithConcurrency":
 		return []handlerKind{kindSubscribe, kindReply, kindConsume, kindOrdered}
-	case "With":
+	case "WithMiddleware":
 		return []handlerKind{kindSubscribe, kindReply, kindConsume, kindOrdered, kindEndpoint}
-	case "ManualAck":
+	case "WithManualAck":
 		return []handlerKind{kindConsume, kindBatch}
-	case "PullMaxMessages":
+	case "WithPullMaxMessages":
 		return []handlerKind{kindConsume, kindOrdered}
-	case "FilterSubjects", "DeliverPolicy":
+	case "WithFilterSubjects", "WithDeliverPolicy":
 		return []handlerKind{kindOrdered}
-	case "AutoInProgress":
+	case "WithAutoInProgress":
 		return []handlerKind{kindConsume, kindBatch}
-	case "BatchSize", "BatchWait":
+	case "WithBatchSize", "WithBatchWait":
 		return []handlerKind{kindBatch}
-	case "EndpointSubject", "EndpointMetadata":
+	case "WithEndpointSubject", "WithEndpointMetadata":
 		return []handlerKind{kindEndpoint}
 	}
 	return nil
@@ -156,26 +156,26 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 			return c, fmt.Errorf("nats: option %s not allowed for %s", name, kind)
 		}
 	}
-	if slices.Contains(c.used, "MaxAttempts") && c.maxAttempts != Unlimited && c.maxAttempts < 1 {
-		return c, fmt.Errorf("nats: MaxAttempts must be at least 1 or Unlimited, got %d", c.maxAttempts)
+	if slices.Contains(c.used, "WithMaxAttempts") && c.maxAttempts != Unlimited && c.maxAttempts < 1 {
+		return c, fmt.Errorf("nats: WithMaxAttempts must be at least 1 or Unlimited, got %d", c.maxAttempts)
 	}
 	if slices.Contains(c.used, "WithBackoff") && c.backoff == nil {
 		return c, errors.New("nats: WithBackoff requires a non-nil Backoff")
 	}
-	if slices.Contains(c.used, "DLQ") && c.dlq == "" {
-		return c, errors.New("nats: DLQ requires a subject")
+	if slices.Contains(c.used, "WithDLQ") && c.dlq == "" {
+		return c, errors.New("nats: WithDLQ requires a subject")
 	}
 	if c.batchSize < 1 {
-		return c, fmt.Errorf("nats: BatchSize must be at least 1, got %d", c.batchSize)
+		return c, fmt.Errorf("nats: WithBatchSize must be at least 1, got %d", c.batchSize)
 	}
 	if c.batchWait <= 0 {
-		return c, fmt.Errorf("nats: BatchWait must be positive, got %s", c.batchWait)
+		return c, fmt.Errorf("nats: WithBatchWait must be positive, got %s", c.batchWait)
 	}
 	if c.manualAck {
 		// The handler owns the ack, so the library has nothing to retry.
-		for _, name := range []string{"MaxAttempts", "WithBackoff", "DLQ"} {
+		for _, name := range []string{"WithMaxAttempts", "WithBackoff", "WithDLQ"} {
 			if slices.Contains(c.used, name) {
-				return c, fmt.Errorf("nats: option %s not allowed with ManualAck", name)
+				return c, fmt.Errorf("nats: option %s not allowed with WithManualAck", name)
 			}
 		}
 	}
@@ -188,53 +188,53 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 	return c, nil
 }
 
-// Queue joins the subscription to a queue group, so each message is
+// WithQueue joins the subscription to a queue group, so each message is
 // delivered to one member of the group.
-func Queue(group string) HandlerOption {
-	return func(c *handlerConfig) { c.queue = group; c.used = append(c.used, "Queue") }
+func WithQueue(group string) HandlerOption {
+	return func(c *handlerConfig) { c.queue = group; c.used = append(c.used, "WithQueue") }
 }
 
-// Concurrency runs up to n handler calls in parallel. Defaults to 1, which
+// WithConcurrency runs up to n handler calls in parallel. Defaults to 1, which
 // preserves message order.
-func Concurrency(n int) HandlerOption {
-	return func(c *handlerConfig) { c.concurrency = n; c.used = append(c.used, "Concurrency") }
+func WithConcurrency(n int) HandlerOption {
+	return func(c *handlerConfig) { c.concurrency = n; c.used = append(c.used, "WithConcurrency") }
 }
 
-// Timeout sets a deadline on the context passed to each handler call.
-func Timeout(d time.Duration) HandlerOption {
-	return func(c *handlerConfig) { c.timeout = d; c.used = append(c.used, "Timeout") }
+// WithTimeout sets a deadline on the context passed to each handler call.
+func WithTimeout(d time.Duration) HandlerOption {
+	return func(c *handlerConfig) { c.timeout = d; c.used = append(c.used, "WithTimeout") }
 }
 
-// With adds middleware to this handler only, inside the app middleware.
-func With(mw ...Middleware) HandlerOption {
-	return func(c *handlerConfig) { c.mws = append(c.mws, mw...); c.used = append(c.used, "With") }
+// WithMiddleware adds middleware to this handler only, inside the app middleware.
+func WithMiddleware(mw ...Middleware) HandlerOption {
+	return func(c *handlerConfig) { c.mws = append(c.mws, mw...); c.used = append(c.used, "WithMiddleware") }
 }
 
-// ManualAck disables automatic ack: the handler acks with Msg.Ack and friends.
-func ManualAck() HandlerOption {
-	return func(c *handlerConfig) { c.manualAck = true; c.used = append(c.used, "ManualAck") }
+// WithManualAck disables automatic ack: the handler acks with Msg.Ack and friends.
+func WithManualAck() HandlerOption {
+	return func(c *handlerConfig) { c.manualAck = true; c.used = append(c.used, "WithManualAck") }
 }
 
-// PullMaxMessages sets how many messages a pull consumer buffers.
-func PullMaxMessages(n int) HandlerOption {
-	return func(c *handlerConfig) { c.pullMax = n; c.used = append(c.used, "PullMaxMessages") }
+// WithPullMaxMessages sets how many messages a pull consumer buffers.
+func WithPullMaxMessages(n int) HandlerOption {
+	return func(c *handlerConfig) { c.pullMax = n; c.used = append(c.used, "WithPullMaxMessages") }
 }
 
-// FilterSubjects limits an ordered consumer to the given subjects.
-func FilterSubjects(subjects ...string) HandlerOption {
-	return func(c *handlerConfig) { c.filters = subjects; c.used = append(c.used, "FilterSubjects") }
+// WithFilterSubjects limits an ordered consumer to the given subjects.
+func WithFilterSubjects(subjects ...string) HandlerOption {
+	return func(c *handlerConfig) { c.filters = subjects; c.used = append(c.used, "WithFilterSubjects") }
 }
 
-// DeliverPolicy sets where an ordered consumer starts in the stream.
-func DeliverPolicy(p jetstream.DeliverPolicy) HandlerOption {
-	return func(c *handlerConfig) { c.deliver = &p; c.used = append(c.used, "DeliverPolicy") }
+// WithDeliverPolicy sets where an ordered consumer starts in the stream.
+func WithDeliverPolicy(p jetstream.DeliverPolicy) HandlerOption {
+	return func(c *handlerConfig) { c.deliver = &p; c.used = append(c.used, "WithDeliverPolicy") }
 }
 
-// MaxAttempts limits how many times a message is delivered to the handler
+// WithMaxAttempts limits how many times a message is delivered to the handler
 // before it is given up on (sent to the DLQ if one is set). Use Unlimited to
 // retry forever.
-func MaxAttempts(n int) HandlerOption {
-	return func(c *handlerConfig) { c.maxAttempts = n; c.used = append(c.used, "MaxAttempts") }
+func WithMaxAttempts(n int) HandlerOption {
+	return func(c *handlerConfig) { c.maxAttempts = n; c.used = append(c.used, "WithMaxAttempts") }
 }
 
 // WithBackoff sets the delay before a failed message is retried.
@@ -242,28 +242,28 @@ func WithBackoff(b Backoff) HandlerOption {
 	return func(c *handlerConfig) { c.backoff = b; c.used = append(c.used, "WithBackoff") }
 }
 
-// DLQ publishes messages that exhausted their attempts, or failed
+// WithDLQ publishes messages that exhausted their attempts, or failed
 // terminally, to subject.
-func DLQ(subject string) HandlerOption {
-	return func(c *handlerConfig) { c.dlq = subject; c.used = append(c.used, "DLQ") }
+func WithDLQ(subject string) HandlerOption {
+	return func(c *handlerConfig) { c.dlq = subject; c.used = append(c.used, "WithDLQ") }
 }
 
-// AutoInProgress keeps the ack wait timer of a message being handled from
+// WithAutoInProgress keeps the ack wait timer of a message being handled from
 // expiring by sending periodic in-progress signals.
-func AutoInProgress() HandlerOption {
-	return func(c *handlerConfig) { c.autoInProgress = true; c.used = append(c.used, "AutoInProgress") }
+func WithAutoInProgress() HandlerOption {
+	return func(c *handlerConfig) { c.autoInProgress = true; c.used = append(c.used, "WithAutoInProgress") }
 }
 
-// BatchSize sets the maximum number of messages passed to a batch handler.
+// WithBatchSize sets the maximum number of messages passed to a batch handler.
 // Defaults to 100.
-func BatchSize(n int) HandlerOption {
-	return func(c *handlerConfig) { c.batchSize = n; c.used = append(c.used, "BatchSize") }
+func WithBatchSize(n int) HandlerOption {
+	return func(c *handlerConfig) { c.batchSize = n; c.used = append(c.used, "WithBatchSize") }
 }
 
-// BatchWait sets how long a batch handler waits to fill a batch. Defaults
+// WithBatchWait sets how long a batch handler waits to fill a batch. Defaults
 // to one second.
-func BatchWait(d time.Duration) HandlerOption {
-	return func(c *handlerConfig) { c.batchWait = d; c.used = append(c.used, "BatchWait") }
+func WithBatchWait(d time.Duration) HandlerOption {
+	return func(c *handlerConfig) { c.batchWait = d; c.used = append(c.used, "WithBatchWait") }
 }
 
 // MsgHandler is a typed message handler for App.Subscribe, App.Consume and

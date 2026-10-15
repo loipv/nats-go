@@ -76,9 +76,9 @@ func TestTokenAuth(t *testing.T) {
 	opts.Authorization = "s3cret"
 	s := natstest.RunServer(&opts)
 	t.Cleanup(s.Shutdown)
-	if err := newApp(t, s, Token("wrong")).Start(context.Background()); err == nil {
+	if err := newApp(t, s, WithToken("wrong")).Start(context.Background()); err == nil {
 		t.Fatal("wrong token must fail")
 	}
-	a := newApp(t, s, Token("s3cret"))
+	a := newApp(t, s, WithToken("s3cret"))
 	start(t, a)
 }

@@ -128,7 +128,7 @@ func TestCustomSubjectFuncAndJSDedup(t *testing.T) {
 	a := newApp(t, s.ClientURL(), func(a *nats.App) {
 		a.Stream(jetstream.StreamConfig{Name: "EVT", Subjects: []string{"com.>"}})
 	})
-	ev := cloudevents.New(a, "src", cloudevents.SubjectFunc(func(t string) string { return strings.ReplaceAll("com.example."+t, "/", ".") }))
+	ev := cloudevents.New(a, "src", cloudevents.WithSubjectFunc(func(t string) string { return strings.ReplaceAll("com.example."+t, "/", ".") }))
 	start(t, a)
 	if ev.Subject("order/created") != "com.example.order.created" {
 		t.Fatal(ev.Subject("order/created"))

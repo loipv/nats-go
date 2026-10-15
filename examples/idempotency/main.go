@@ -41,10 +41,10 @@ func main() {
 	app.Use(
 		nats.Recover(),
 		nats.Idempotent(store,
-			nats.IdempotencyKey(func(m *nats.RawMsg) string { return m.Header.Get("X-Order-Id") }),
+			nats.WithIdempotencyKey(func(m *nats.RawMsg) string { return m.Header.Get("X-Order-Id") }),
 			// Must exceed the longest the handler can run.
-			nats.ClaimTTL(time.Minute),
-			nats.DoneTTL(time.Hour),
+			nats.WithClaimTTL(time.Minute),
+			nats.WithDoneTTL(time.Hour),
 		),
 	)
 

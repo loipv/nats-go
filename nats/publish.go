@@ -37,24 +37,24 @@ func jsOption(name, header, value string) PubOption {
 	}
 }
 
-// MsgID sets Nats-Msg-Id: the stream drops messages with an ID it has seen
+// WithMsgID sets Nats-Msg-Id: the stream drops messages with an ID it has seen
 // within its Duplicates window. PublishJS only.
-func MsgID(id string) PubOption { return jsOption("MsgID", jetstream.MsgIDHeader, id) }
+func WithMsgID(id string) PubOption { return jsOption("WithMsgID", jetstream.MsgIDHeader, id) }
 
-// ExpectStream fails the publish unless the subject belongs to stream. PublishJS only.
-func ExpectStream(stream string) PubOption {
-	return jsOption("ExpectStream", jetstream.ExpectedStreamHeader, stream)
+// WithExpectStream fails the publish unless the subject belongs to stream. PublishJS only.
+func WithExpectStream(stream string) PubOption {
+	return jsOption("WithExpectStream", jetstream.ExpectedStreamHeader, stream)
 }
 
-// ExpectLastSeq fails the publish unless the stream's last sequence is seq. PublishJS only.
-func ExpectLastSeq(seq uint64) PubOption {
-	return jsOption("ExpectLastSeq", jetstream.ExpectedLastSeqHeader, strconv.FormatUint(seq, 10))
+// WithExpectLastSeq fails the publish unless the stream's last sequence is seq. PublishJS only.
+func WithExpectLastSeq(seq uint64) PubOption {
+	return jsOption("WithExpectLastSeq", jetstream.ExpectedLastSeqHeader, strconv.FormatUint(seq, 10))
 }
 
-// ExpectLastSubjectSeq fails the publish unless the last sequence on the
+// WithExpectLastSubjectSeq fails the publish unless the last sequence on the
 // subject is seq. PublishJS only.
-func ExpectLastSubjectSeq(seq uint64) PubOption {
-	return jsOption("ExpectLastSubjectSeq", jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(seq, 10))
+func WithExpectLastSubjectSeq(seq uint64) PubOption {
+	return jsOption("WithExpectLastSubjectSeq", jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(seq, 10))
 }
 
 // build encodes v and applies opts without checking the app state or the

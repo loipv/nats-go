@@ -52,7 +52,7 @@ func main() {
 		defer close(greeted)
 		fmt.Printf("hello %s (request id %s)\n", m.Data, m.Header.Get("X-Request-Id"))
 		return nil
-	}), nats.With(timing))
+	}), nats.WithMiddleware(timing))
 
 	// Recover turns this panic into an error; the subscription keeps running.
 	app.Subscribe("crash", nats.Typed(func(context.Context, *nats.Msg[[]byte]) error {

@@ -112,15 +112,15 @@ func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler
 	s.reg.endpoints = append(s.reg.endpoints, e)
 }
 
-// EndpointSubject sets the subject of an endpoint, relative to its group.
+// WithEndpointSubject sets the subject of an endpoint, relative to its group.
 // Defaults to the endpoint name.
-func EndpointSubject(subject string) HandlerOption {
-	return func(c *handlerConfig) { c.endpointSubject = subject; c.used = append(c.used, "EndpointSubject") }
+func WithEndpointSubject(subject string) HandlerOption {
+	return func(c *handlerConfig) { c.endpointSubject = subject; c.used = append(c.used, "WithEndpointSubject") }
 }
 
-// EndpointMetadata sets the metadata an endpoint reports in the service INFO.
-func EndpointMetadata(md map[string]string) HandlerOption {
-	return func(c *handlerConfig) { c.endpointMetadata = md; c.used = append(c.used, "EndpointMetadata") }
+// WithEndpointMetadata sets the metadata an endpoint reports in the service INFO.
+func WithEndpointMetadata(md map[string]string) HandlerOption {
+	return func(c *handlerConfig) { c.endpointMetadata = md; c.used = append(c.used, "WithEndpointMetadata") }
 }
 
 type serviceReg struct {

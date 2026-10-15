@@ -51,7 +51,7 @@ func TestServiceDiscoverableAndServes(t *testing.T) {
 	a := newApp(t, s)
 	svc := a.Service(micro.Config{Name: "orders", Version: "1.0.0", Description: "Order API"})
 	svc.Endpoint("get", TypedReply(func(_ context.Context, m *Msg[getReq]) (order, error) { return order{ID: m.Data.ID}, nil }),
-		EndpointSubject("orders.get"), EndpointMetadata(map[string]string{"auth": "none"}))
+		WithEndpointSubject("orders.get"), WithEndpointMetadata(map[string]string{"auth": "none"}))
 	g := svc.Group("orders.v2")
 	g.Endpoint("get", TypedReply(func(_ context.Context, m *Msg[getReq]) (order, error) { return order{ID: "v2-" + m.Data.ID}, nil }))
 	start(t, a)
@@ -84,7 +84,7 @@ func TestServiceErrorsAndStats(t *testing.T) {
 			return 0, errors.New("division by zero")
 		}
 		return m.Data[0] / m.Data[1], nil
-	}), EndpointSubject("calc.div"))
+	}), WithEndpointSubject("calc.div"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -112,7 +112,7 @@ func TestServiceRetryAndDLQ(t *testing.T) {
 	var calls atomic.Int32
 	svc := a.Service(micro.Config{Name: "flaky", Version: "1.0.0"})
 	svc.Endpoint("do", TypedReply(func(context.Context, *Msg[int]) (int, error) { calls.Add(1); return 0, errors.New("down") }),
-		EndpointSubject("flaky.do"), MaxAttempts(2), fast, DLQ("dlq.flaky"))
+		WithEndpointSubject("flaky.do"), WithMaxAttempts(2), fast, WithDLQ("dlq.flaky"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -132,20 +132,20 @@ func TestServiceRegistrationErrors(t *testing.T) {
 			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Group("").Endpoint("e", TypedReply(echoInt))
 		},
 		"concurrency": func(a *App) {
-			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Endpoint("e", TypedReply(echoInt), Concurrency(2))
+			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Endpoint("e", TypedReply(echoInt), WithConcurrency(2))
 		},
 		"subject on reply": func(a *App) {
-			a.Reply("r", TypedReply(echoInt), EndpointSubject("r"))
+			a.Reply("r", TypedReply(echoInt), WithEndpointSubject("r"))
 		},
 		"duplicate service": func(a *App) {
 			a.Service(micro.Config{Name: "x", Version: "1.0.0"})
 			a.Service(micro.Config{Name: "x", Version: "1.0.0"})
 		},
 		"dlq on own subject": func(a *App) {
-			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Endpoint("e", TypedReply(echoInt), EndpointSubject("dlq.e"), DLQ("dlq.e"))
+			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Endpoint("e", TypedReply(echoInt), WithEndpointSubject("dlq.e"), WithDLQ("dlq.e"))
 		},
 		"dlq on group subject": func(a *App) {
-			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Group("dlq").Endpoint("e", TypedReply(echoInt), DLQ("dlq.e"))
+			a.Service(micro.Config{Name: "x", Version: "1.0.0"}).Group("dlq").Endpoint("e", TypedReply(echoInt), WithDLQ("dlq.e"))
 		},
 		"invalid micro name": func(a *App) {
 			a.Service(micro.Config{Name: "x y", Version: "1.0.0"}).Endpoint("e", TypedReply(echoInt))
@@ -171,7 +171,7 @@ func TestServiceShutdownDuringRequest(t *testing.T) { // Review Focus #1
 		started <- struct{}{}
 		<-ctx.Done()
 		return 0, ctx.Err()
-	}), EndpointSubject("slow.do"))
+	}), WithEndpointSubject("slow.do"))
 	start(t, a)
 	go func() {
 		ctx, c := context.WithTimeout(context.Background(), 3*time.Second)
@@ -196,7 +196,7 @@ func TestServiceShutdownDrainsBufferedRequests(t *testing.T) {
 		started <- struct{}{}
 		time.Sleep(100 * time.Millisecond)
 		return m.Data, nil
-	}), EndpointSubject("drain.do"))
+	}), WithEndpointSubject("drain.do"))
 	start(t, a)
 	// A separate requester connection, so the app's drain does not drop the replies.
 	nc, err := natsio.Connect(s.ClientURL())

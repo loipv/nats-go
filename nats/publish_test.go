@@ -83,11 +83,11 @@ func TestPublishJSDedup(t *testing.T) {
 	a := newApp(t, s)
 	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
 	start(t, a)
-	ack1, err := a.PublishJS(context.Background(), "orders.created", map[string]string{"id": "1"}, MsgID("o-1"))
+	ack1, err := a.PublishJS(context.Background(), "orders.created", map[string]string{"id": "1"}, WithMsgID("o-1"))
 	if err != nil || ack1.Duplicate {
 		t.Fatal(ack1, err)
 	}
-	ack2, err := a.PublishJS(context.Background(), "orders.created", map[string]string{"id": "1"}, MsgID("o-1"))
+	ack2, err := a.PublishJS(context.Background(), "orders.created", map[string]string{"id": "1"}, WithMsgID("o-1"))
 	if err != nil || !ack2.Duplicate || ack2.Sequence != ack1.Sequence {
 		t.Fatal(ack2, err)
 	}
@@ -96,7 +96,7 @@ func TestPublishJSDedup(t *testing.T) {
 func TestJSOnlyOptionRejectedOnPublish(t *testing.T) {
 	a := newApp(t, runServer(t))
 	start(t, a)
-	if err := a.Publish(context.Background(), "x", nil, MsgID("1")); err == nil {
+	if err := a.Publish(context.Background(), "x", nil, WithMsgID("1")); err == nil {
 		t.Fatal("MsgID requires PublishJS")
 	}
 }

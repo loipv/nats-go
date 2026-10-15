@@ -41,16 +41,16 @@ func TestRetryOptionRules(t *testing.T) {
 		kind handlerKind
 		opts []HandlerOption
 	}{
-		{kindSubscribe, []HandlerOption{MaxAttempts(0)}},
+		{kindSubscribe, []HandlerOption{WithMaxAttempts(0)}},
 		{kindSubscribe, []HandlerOption{WithBackoff(nil)}},
-		{kindSubscribe, []HandlerOption{DLQ("")}},
-		{kindConsume, []HandlerOption{ManualAck(), MaxAttempts(3)}},
-		{kindConsume, []HandlerOption{BatchSize(10)}},
-		{kindBatch, []HandlerOption{Concurrency(2)}},
-		{kindBatch, []HandlerOption{With(Recover())}},
-		{kindBatch, []HandlerOption{BatchSize(0)}},
-		{kindBatch, []HandlerOption{BatchWait(0)}},
-		{kindSubscribe, []HandlerOption{AutoInProgress()}},
+		{kindSubscribe, []HandlerOption{WithDLQ("")}},
+		{kindConsume, []HandlerOption{WithManualAck(), WithMaxAttempts(3)}},
+		{kindConsume, []HandlerOption{WithBatchSize(10)}},
+		{kindBatch, []HandlerOption{WithConcurrency(2)}},
+		{kindBatch, []HandlerOption{WithMiddleware(Recover())}},
+		{kindBatch, []HandlerOption{WithBatchSize(0)}},
+		{kindBatch, []HandlerOption{WithBatchWait(0)}},
+		{kindSubscribe, []HandlerOption{WithAutoInProgress()}},
 	}
 	for _, c := range bad {
 		if _, err := newHandlerConfig(c.kind, c.opts); err == nil {
@@ -58,7 +58,7 @@ func TestRetryOptionRules(t *testing.T) {
 		}
 	}
 	for _, kind := range []handlerKind{kindSubscribe, kindReply, kindConsume, kindOrdered, kindBatch} {
-		if _, err := newHandlerConfig(kind, []HandlerOption{MaxAttempts(Unlimited), DLQ("dlq.x"), WithBackoff(defaultBackoff())}); err != nil {
+		if _, err := newHandlerConfig(kind, []HandlerOption{WithMaxAttempts(Unlimited), WithDLQ("dlq.x"), WithBackoff(defaultBackoff())}); err != nil {
 			t.Fatal(kind, err)
 		}
 	}

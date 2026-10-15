@@ -25,20 +25,20 @@ type idemConfig struct {
 // IdempotencyOption configures Idempotent.
 type IdempotencyOption func(*idemConfig)
 
-// IdempotencyKey derives the dedup key from a message. The default is the
+// WithIdempotencyKey derives the dedup key from a message. The default is the
 // Nats-Msg-Id header. An empty key disables dedup for that message.
-func IdempotencyKey(fn func(*RawMsg) string) IdempotencyOption {
+func WithIdempotencyKey(fn func(*RawMsg) string) IdempotencyOption {
 	return func(c *idemConfig) { c.key = fn }
 }
 
-// ClaimTTL sets how long an in-flight claim lasts (default 1 minute). It must
+// WithClaimTTL sets how long an in-flight claim lasts (default 1 minute). It must
 // exceed the worst-case handler duration: claims are released by key, without
 // an ownership token, so a handler that outlives its claim can have its
 // duplicate admitted and its claim released by the other delivery.
-func ClaimTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.claimTTL = d } }
+func WithClaimTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.claimTTL = d } }
 
-// DoneTTL sets how long a completed key is remembered (default 24 hours).
-func DoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.doneTTL = d } }
+// WithDoneTTL sets how long a completed key is remembered (default 24 hours).
+func WithDoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.doneTTL = d } }
 
 // Idempotent skips messages whose key was already processed successfully.
 // It returns Terminal(ErrDuplicate) for a duplicate without calling the

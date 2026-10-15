@@ -22,7 +22,7 @@ func TestConsumeBatchAcksAll(t *testing.T) {
 	} // backlog
 	a := newApp(t, s)
 	sizes := make(chan int, 10)
-	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(_ context.Context, ms []*Msg[order]) error { sizes <- len(ms); return nil }), BatchSize(5), BatchWait(200*time.Millisecond))
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(_ context.Context, ms []*Msg[order]) error { sizes <- len(ms); return nil }), WithBatchSize(5), WithBatchWait(200*time.Millisecond))
 	start(t, a)
 	total := 0
 	for total < 12 {
@@ -54,7 +54,7 @@ func TestConsumeBatchPartialFailure(t *testing.T) {
 			}
 		}
 		return be
-	}), BatchSize(10), BatchWait(200*time.Millisecond), DLQ("dlq.orders"))
+	}), WithBatchSize(10), WithBatchWait(200*time.Millisecond), WithDLQ("dlq.orders"))
 	start(t, a)
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) == 1 && pendingAcks(t, a, "billing") == 0 })
 	if dlqMsgs(t, a)[0].Header.Get("Nats-DLQ-Error") != "bad row" {
@@ -77,7 +77,7 @@ func TestConsumeBatchFiltersPoison(t *testing.T) {
 		}
 		got <- ids
 		return nil
-	}), BatchWait(200*time.Millisecond))
+	}), WithBatchWait(200*time.Millisecond))
 	start(t, a)
 	if ids := recv(t, got); len(ids) != 1 || ids[0] != "good" {
 		t.Fatal(ids)
@@ -99,7 +99,7 @@ func TestConsumeBatchWholeBatchRetry(t *testing.T) {
 			return errors.New("db down")
 		}
 		return nil
-	}), BatchWait(200*time.Millisecond), fast)
+	}), WithBatchWait(200*time.Millisecond), fast)
 	start(t, a)
 	waitFor(t, func() bool { return calls.Load() >= 2 && pendingAcks(t, a, "billing") == 0 })
 }
@@ -118,7 +118,7 @@ func TestConsumeBatchShutdownDeadline(t *testing.T) { // Review Focus #4
 	setupStream(t, a)
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	defer close(release)
-	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error { started <- struct{}{}; <-release; return nil }), BatchWait(100*time.Millisecond))
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error { started <- struct{}{}; <-release; return nil }), WithBatchWait(100*time.Millisecond))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
 	<-started
@@ -146,7 +146,7 @@ func TestConsumeBatchTypedNilBatchError(t *testing.T) {
 		calls.Add(1)
 		var be *BatchError
 		return be // a typed nil reports no failures
-	}), BatchWait(200*time.Millisecond), fast)
+	}), WithBatchWait(200*time.Millisecond), fast)
 	start(t, a)
 	waitFor(t, func() bool {
 		return calls.Load() >= 1 && pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 3

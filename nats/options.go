@@ -114,17 +114,17 @@ func natsOption(opt natsio.Option) Option {
 	return WithNATSOptions(opt)
 }
 
-// Name sets the connection name shown in server monitoring.
-func Name(name string) Option { return natsOption(natsio.Name(name)) }
+// WithName sets the connection name shown in server monitoring.
+func WithName(name string) Option { return natsOption(natsio.Name(name)) }
 
-// UserInfo authenticates with a username and password.
-func UserInfo(user, password string) Option { return natsOption(natsio.UserInfo(user, password)) }
+// WithUserInfo authenticates with a username and password.
+func WithUserInfo(user, password string) Option { return natsOption(natsio.UserInfo(user, password)) }
 
-// Token authenticates with a token.
-func Token(token string) Option { return natsOption(natsio.Token(token)) }
+// WithToken authenticates with a token.
+func WithToken(token string) Option { return natsOption(natsio.Token(token)) }
 
-// NKeyFromSeed authenticates with the NKey seed stored in seedFile.
-func NKeyFromSeed(seedFile string) Option {
+// WithNKeyFromSeed authenticates with the NKey seed stored in seedFile.
+func WithNKeyFromSeed(seedFile string) Option {
 	return func(o *options) error {
 		opt, err := natsio.NkeyOptionFromSeed(seedFile)
 		if err != nil {
@@ -135,19 +135,19 @@ func NKeyFromSeed(seedFile string) Option {
 	}
 }
 
-// UserCredentials authenticates with a decentralized JWT credentials file.
-func UserCredentials(path string) Option { return natsOption(natsio.UserCredentials(path)) }
+// WithUserCredentials authenticates with a decentralized JWT credentials file.
+func WithUserCredentials(path string) Option { return natsOption(natsio.UserCredentials(path)) }
 
-// UserJWTAndSeed authenticates with a user JWT and NKey seed given as strings.
-func UserJWTAndSeed(jwt, seed string) Option { return natsOption(natsio.UserJWTAndSeed(jwt, seed)) }
+// WithUserJWTAndSeed authenticates with a user JWT and NKey seed given as strings.
+func WithUserJWTAndSeed(jwt, seed string) Option { return natsOption(natsio.UserJWTAndSeed(jwt, seed)) }
 
-// RootCAs trusts the PEM-encoded CA certificates in files.
-func RootCAs(files ...string) Option { return natsOption(natsio.RootCAs(files...)) }
+// WithRootCAs trusts the PEM-encoded CA certificates in files.
+func WithRootCAs(files ...string) Option { return natsOption(natsio.RootCAs(files...)) }
 
-// ClientCert presents a client certificate for mutual TLS.
-func ClientCert(certFile, keyFile string) Option {
+// WithClientCert presents a client certificate for mutual TLS.
+func WithClientCert(certFile, keyFile string) Option {
 	return natsOption(natsio.ClientCert(certFile, keyFile))
 }
 
-// TLSConfig sets the full TLS configuration.
-func TLSConfig(cfg *tls.Config) Option { return natsOption(natsio.Secure(cfg)) }
+// WithTLSConfig sets the full TLS configuration.
+func WithTLSConfig(cfg *tls.Config) Option { return natsOption(natsio.Secure(cfg)) }

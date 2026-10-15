@@ -48,9 +48,9 @@ func TestConsumeRetriesThenDLQ(t *testing.T) {
 	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error {
 		calls.Add(1)
 		return errors.New("db down")
-	}), MaxAttempts(3), fast, DLQ("dlq.orders"))
+	}), WithMaxAttempts(3), fast, WithDLQ("dlq.orders"))
 	start(t, a)
-	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("m-1"))
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("m-1"))
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) == 1 })
 	d := dlqMsgs(t, a)[0]
 	if calls.Load() != 3 || string(d.Data) != `{"id":"1"}` {
@@ -71,7 +71,7 @@ func TestConsumeTerminalGoesToDLQWithoutRetry(t *testing.T) {
 	setupStream(t, a)
 	setupDLQ(t, a)
 	var calls atomic.Int32
-	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return Terminal(errors.New("bad")) }), DLQ("dlq.orders"))
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return Terminal(errors.New("bad")) }), WithDLQ("dlq.orders"))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", []byte("{not json"))
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "2"})
@@ -108,7 +108,7 @@ func TestConsumeExhaustedWithoutDLQTerms(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	var calls atomic.Int32
-	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return errors.New("x") }), MaxAttempts(2), fast)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return errors.New("x") }), WithMaxAttempts(2), fast)
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
 	time.Sleep(time.Second)
@@ -128,7 +128,7 @@ func TestConsumeExceededSkipsHandler(t *testing.T) {
 		calls.Add(1)
 		time.Sleep(700 * time.Millisecond)
 		return errors.New("slow")
-	}), MaxAttempts(1), DLQ("dlq.orders"), Concurrency(2))
+	}), WithMaxAttempts(1), WithDLQ("dlq.orders"), WithConcurrency(2))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) >= 1 })
@@ -144,7 +144,7 @@ func TestDLQPublishFailureNaks(t *testing.T) {
 	setupStream(t, a)
 	setupDLQ(t, a)
 	var calls atomic.Int32
-	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return Terminal(errors.New("bad")) }), DLQ("dlq.orders"), fast)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return Terminal(errors.New("bad")) }), WithDLQ("dlq.orders"), fast)
 	start(t, a)
 	_ = a.JetStream().DeleteStream(context.Background(), "DLQ") // DLQ publish now fails
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
@@ -155,18 +155,18 @@ func TestDLQPublishFailureNaks(t *testing.T) {
 
 func TestStartChecks(t *testing.T) {
 	cases := map[string]func(a *App){
-		"no DLQ stream":        func(a *App) { a.Consume("ORDERS", "billing", Typed(nopOrder), DLQ("nowhere.x")) },
-		"DLQ in source stream": func(a *App) { a.Consume("ORDERS", "billing", Typed(nopOrder), DLQ("orders.dlq")) }, // Review Focus #1
-		"MaxDeliver too low":   func(a *App) { a.Consume("ORDERS", "billing", Typed(nopOrder), MaxAttempts(5)) },    // setupStream MaxDeliver 5
+		"no DLQ stream":        func(a *App) { a.Consume("ORDERS", "billing", Typed(nopOrder), WithDLQ("nowhere.x")) },
+		"DLQ in source stream": func(a *App) { a.Consume("ORDERS", "billing", Typed(nopOrder), WithDLQ("orders.dlq")) }, // Review Focus #1
+		"MaxDeliver too low":   func(a *App) { a.Consume("ORDERS", "billing", Typed(nopOrder), WithMaxAttempts(5)) },    // setupStream MaxDeliver 5
 		"core DLQ no stream": func(a *App) {
-			a.Subscribe("x", Typed(func(context.Context, *Msg[[]byte]) error { return nil }), DLQ("nowhere.x"))
+			a.Subscribe("x", Typed(func(context.Context, *Msg[[]byte]) error { return nil }), WithDLQ("nowhere.x"))
 		},
 		// orders.dlq is captured by ORDERS, so only the subject match can fail Start.
 		"subscribe DLQ matches own subject": func(a *App) {
-			a.Subscribe("orders.*", Typed(func(context.Context, *Msg[[]byte]) error { return nil }), DLQ("orders.dlq"))
+			a.Subscribe("orders.*", Typed(func(context.Context, *Msg[[]byte]) error { return nil }), WithDLQ("orders.dlq"))
 		},
 		"reply DLQ matches own subject": func(a *App) {
-			a.Reply("orders.>", TypedReply(func(context.Context, *Msg[[]byte]) ([]byte, error) { return nil, nil }), DLQ("orders.dlq"))
+			a.Reply("orders.>", TypedReply(func(context.Context, *Msg[[]byte]) ([]byte, error) { return nil, nil }), WithDLQ("orders.dlq"))
 		},
 	}
 	for name, add := range cases {

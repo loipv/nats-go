@@ -48,11 +48,11 @@ func main() {
 		}
 		return nil
 	}),
-		nats.BatchSize(10),
-		nats.BatchWait(500*time.Millisecond),
-		nats.MaxAttempts(2),
+		nats.WithBatchSize(10),
+		nats.WithBatchWait(500*time.Millisecond),
+		nats.WithMaxAttempts(2),
 		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, time.Second)),
-		nats.DLQ("batchdlq.orders"),
+		nats.WithDLQ("batchdlq.orders"),
 	)
 
 	ctx := context.Background()

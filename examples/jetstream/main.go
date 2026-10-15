@@ -52,7 +52,7 @@ func main() {
 		defer wg.Done()
 		fmt.Printf("audit: recorded order %s\n", m.Data.ID)
 		return m.Ack()
-	}), nats.ManualAck())
+	}), nats.WithManualAck())
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {
@@ -63,7 +63,7 @@ func main() {
 	// Publishing twice with the same MsgID stores the message once.
 	order := Order{ID: fmt.Sprintf("o-%d", time.Now().UnixNano()), Amount: 100}
 	for range 2 {
-		ack, err := app.PublishJS(ctx, "orders.created", order, nats.MsgID(order.ID))
+		ack, err := app.PublishJS(ctx, "orders.created", order, nats.WithMsgID(order.ID))
 		if err != nil {
 			log.Fatal(err)
 		}

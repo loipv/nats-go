@@ -66,10 +66,10 @@ func assertShutdownBounded(t *testing.T, a *App) {
 
 // I1: ordered consumers must not accept Concurrency > 1.
 func TestOrderedRejectsConcurrency(t *testing.T) {
-	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{Concurrency(4)}); err == nil {
+	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{WithConcurrency(4)}); err == nil {
 		t.Fatal("Concurrency(4) must be rejected for ordered")
 	}
-	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{Concurrency(1)}); err != nil {
+	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{WithConcurrency(1)}); err != nil {
 		t.Fatal(err)
 	}
 }

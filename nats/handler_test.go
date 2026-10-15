@@ -84,13 +84,13 @@ func TestMsgAckOnCoreReturnsErrNotJetStream(t *testing.T) {
 }
 
 func TestHandlerOptionRules(t *testing.T) {
-	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{ManualAck()}); err == nil {
+	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{WithManualAck()}); err == nil {
 		t.Fatal("ManualAck not allowed on ordered")
 	}
-	if _, err := newHandlerConfig(kindConsume, []HandlerOption{Queue("q")}); err == nil {
+	if _, err := newHandlerConfig(kindConsume, []HandlerOption{WithQueue("q")}); err == nil {
 		t.Fatal("Queue not allowed on consume")
 	}
-	if _, err := newHandlerConfig(kindSubscribe, []HandlerOption{Concurrency(0)}); err == nil {
+	if _, err := newHandlerConfig(kindSubscribe, []HandlerOption{WithConcurrency(0)}); err == nil {
 		t.Fatal("Concurrency(0) invalid")
 	}
 	c, err := newHandlerConfig(kindSubscribe, nil)

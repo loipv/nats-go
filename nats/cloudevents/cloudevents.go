@@ -21,9 +21,9 @@ type Emitter struct {
 // Option configures an Emitter.
 type Option func(*Emitter)
 
-// SubjectFunc maps an event type to the NATS subject it is published on and
+// WithSubjectFunc maps an event type to the NATS subject it is published on and
 // handled from. The default is "events." + eventType.
-func SubjectFunc(fn func(eventType string) string) Option {
+func WithSubjectFunc(fn func(eventType string) string) Option {
 	return func(e *Emitter) { e.subjectFor = fn }
 }
 
@@ -105,7 +105,7 @@ func (e *Emitter) PublishJS(ctx context.Context, eventType string, data any, opt
 	if err != nil {
 		return nil, err
 	}
-	return e.app.PublishJS(ctx, e.Subject(eventType), data, append([]nats.PubOption{nats.WithHeader(h), nats.MsgID(id)}, o.pub...)...)
+	return e.app.PublishJS(ctx, e.Subject(eventType), data, append([]nats.PubOption{nats.WithHeader(h), nats.WithMsgID(id)}, o.pub...)...)
 }
 
 func (e *Emitter) build(eventType string, data any, opts []PublishOption) (nats.Header, string, publishOptions, error) {

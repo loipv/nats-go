@@ -59,3 +59,36 @@ func TestTypedHandlerReused(t *testing.T) {
 		return seen["reuse.core"] == 1 && seen["orders.reuse"] == 1
 	})
 }
+
+func TestOptionErrorsUseNewNames(t *testing.T) {
+	s := runServer(t)
+	noop := Typed(func(context.Context, *Msg[[]byte]) error { return nil })
+	batch := TypedBatch(func(context.Context, []*Msg[[]byte]) error { return nil })
+	cases := map[string]struct {
+		register func(a *App)
+		want     string
+	}{
+		"handler kind": {func(a *App) { a.Subscribe("x", noop, WithManualAck()) }, "WithManualAck"},
+		"max attempts": {func(a *App) { a.Subscribe("x", noop, WithMaxAttempts(0)) }, "WithMaxAttempts"},
+		"dlq empty":    {func(a *App) { a.Subscribe("x", noop, WithDLQ("")) }, "WithDLQ"},
+		"batch size": {func(a *App) {
+			setupStream(t, a)
+			a.ConsumeBatch("ORDERS", "billing", batch, WithBatchSize(0))
+		}, "WithBatchSize"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := newApp(t, s)
+			c.register(a)
+			if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Start err = %v, want %q", err, c.want)
+			}
+			_ = a.Shutdown(context.Background())
+		})
+	}
+	a := newApp(t, s)
+	start(t, a)
+	if err := a.Publish(context.Background(), "x", 1, WithMsgID("1")); err == nil || !strings.Contains(err.Error(), "WithMsgID") {
+		t.Fatalf("Publish err = %v, want WithMsgID", err)
+	}
+}

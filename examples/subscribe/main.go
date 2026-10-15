@@ -34,7 +34,7 @@ func main() {
 		defer wg.Done()
 		fmt.Printf("received %s: order %s\n", m.Subject, m.Data.ID)
 		return nil
-	}), nats.Queue("workers"), nats.Concurrency(4))
+	}), nats.WithQueue("workers"), nats.WithConcurrency(4))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

@@ -19,7 +19,7 @@ func TestSubscribeRetriesInProcess(t *testing.T) {
 			return errors.New("not yet")
 		}
 		return nil
-	}), MaxAttempts(3), fast)
+	}), WithMaxAttempts(3), fast)
 	start(t, a)
 	_ = a.Conn().Publish("r", nil)
 	if recv(t, attempts) != 1 || recv(t, attempts) != 2 || recv(t, attempts) != 3 {
@@ -45,7 +45,7 @@ func TestSubscribeExhaustedGoesToDLQ(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	setupDLQ(t, a)
-	a.Subscribe("core.x", Typed(func(context.Context, *Msg[[]byte]) error { return errors.New("nope") }), MaxAttempts(2), fast, DLQ("dlq.core"))
+	a.Subscribe("core.x", Typed(func(context.Context, *Msg[[]byte]) error { return errors.New("nope") }), WithMaxAttempts(2), fast, WithDLQ("dlq.core"))
 	start(t, a)
 	_ = a.Publish(context.Background(), "core.x", []byte("payload"), WithHeader(Header{"Nats-Msg-Id": []string{"c-1"}}))
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) == 1 })
@@ -65,8 +65,8 @@ func TestReplyRetriesThenResponds(t *testing.T) {
 			return 0, errors.New("flaky")
 		}
 		return m.Data * 10, nil
-	}), MaxAttempts(2), fast)
-	a.Reply("broken", TypedReply(func(context.Context, *Msg[int]) (int, error) { return 0, errors.New("broken") }), MaxAttempts(2), fast, DLQ("dlq.reply"))
+	}), WithMaxAttempts(2), fast)
+	a.Reply("broken", TypedReply(func(context.Context, *Msg[int]) (int, error) { return 0, errors.New("broken") }), WithMaxAttempts(2), fast, WithDLQ("dlq.reply"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -98,7 +98,7 @@ func TestOrderedRetryKeepsOrder(t *testing.T) {
 		seen = append(seen, m.Data.ID)
 		mu.Unlock()
 		return nil
-	}), MaxAttempts(2), fast)
+	}), WithMaxAttempts(2), fast)
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "a"})
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "b"})
@@ -113,7 +113,7 @@ func TestShutdownAbandonsRetryWait(t *testing.T) {
 	a := newApp(t, s)
 	called := make(chan struct{}, 1)
 	a.Subscribe("slow", Typed(func(context.Context, *Msg[[]byte]) error { called <- struct{}{}; return errors.New("x") }),
-		MaxAttempts(3), WithBackoff(func(int) time.Duration { return time.Hour }))
+		WithMaxAttempts(3), WithBackoff(func(int) time.Duration { return time.Hour }))
 	start(t, a)
 	_ = a.Conn().Publish("slow", nil)
 	<-called
@@ -132,7 +132,7 @@ func TestReplyEncodeFailureNotRetried(t *testing.T) {
 	a.Reply("unencodable", TypedReply(func(context.Context, *Msg[int]) (bad, error) {
 		calls.Add(1)
 		return bad{F: func() {}}, nil
-	}), MaxAttempts(3), fast, DLQ("dlq.reply"))
+	}), WithMaxAttempts(3), fast, WithDLQ("dlq.reply"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

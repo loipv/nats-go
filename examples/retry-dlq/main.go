@@ -52,9 +52,9 @@ func main() {
 		}
 		return errors.New("card gateway unavailable")
 	}),
-		nats.MaxAttempts(3),
+		nats.WithMaxAttempts(3),
 		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, 2*time.Second)),
-		nats.DLQ("dlq.payments"),
+		nats.WithDLQ("dlq.payments"),
 	)
 
 	// Core NATS never redelivers, so the library retries in the worker:
@@ -63,9 +63,9 @@ func main() {
 		fmt.Printf("notifier: %s attempt %d\n", m.Data.ID, m.Attempt())
 		return errors.New("mail server down")
 	}),
-		nats.MaxAttempts(2),
+		nats.WithMaxAttempts(2),
 		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, 2*time.Second)),
-		nats.DLQ("dlq.notify"),
+		nats.WithDLQ("dlq.notify"),
 	)
 
 	// Read the DLQ: only messages dead-lettered during this run.
@@ -90,7 +90,7 @@ func main() {
 		mu.Unlock()
 		deadLettered <- struct{}{}
 		return nil
-	}), nats.DeliverPolicy(jetstream.DeliverNewPolicy))
+	}), nats.WithDeliverPolicy(jetstream.DeliverNewPolicy))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {
@@ -103,7 +103,7 @@ func main() {
 	broken := Payment{ID: fmt.Sprintf("broken-%d", run), Amount: 20}
 	mail := Payment{ID: fmt.Sprintf("mail-%d", run), Amount: 30}
 	for _, p := range []Payment{flaky, broken} {
-		if _, err := app.PublishJS(ctx, "payments.charge", p, nats.MsgID(p.ID)); err != nil {
+		if _, err := app.PublishJS(ctx, "payments.charge", p, nats.WithMsgID(p.ID)); err != nil {
 			log.Fatal(err)
 		}
 	}

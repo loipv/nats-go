@@ -55,7 +55,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	app, err := nats.New(nats.WithURL(natsURL()), nats.Name("inventory"))
+	app, err := nats.New(nats.WithURL(natsURL()), nats.WithName("inventory"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func main() {
 			return Stock{}, nats.Terminal(errors.New("unknown sku"))
 		}
 		return Stock{SKU: m.Data.SKU, Quantity: q}, nil
-	}), nats.EndpointMetadata(map[string]string{"owner": "warehouse"}))
+	}), nats.WithEndpointMetadata(map[string]string{"owner": "warehouse"}))
 
 	// Subject "inventory.admin.reset".
 	admin := inv.Group("admin")

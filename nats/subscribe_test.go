@@ -27,7 +27,7 @@ func TestSubscribeQueueGroupDeliversOnce(t *testing.T) {
 	var n atomic.Int32
 	for range 2 {
 		a := newApp(t, s)
-		a.Subscribe("jobs", Typed(func(context.Context, *Msg[[]byte]) error { n.Add(1); return nil }), Queue("w"))
+		a.Subscribe("jobs", Typed(func(context.Context, *Msg[[]byte]) error { n.Add(1); return nil }), WithQueue("w"))
 		start(t, a)
 	}
 	pub := newApp(t, s)
@@ -77,7 +77,7 @@ func TestSubscribeTimeoutSetsDeadline(t *testing.T) {
 		_, ok := ctx.Deadline()
 		got <- ok
 		return nil
-	}), Timeout(time.Second))
+	}), WithTimeout(time.Second))
 	start(t, a)
 	_ = a.Conn().Publish("t", nil)
 	if !recv(t, got) {

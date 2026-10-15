@@ -61,7 +61,7 @@ func TestIdempotentSkipsDuplicates(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	// Nats-Msg-Id would be deduplicated by the stream itself, so key on another header.
-	a.Use(Idempotent(NewMemoryStore(), IdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
+	a.Use(Idempotent(NewMemoryStore(), WithIdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
 	var calls atomic.Int32
 	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return nil }))
 	start(t, a)
@@ -87,7 +87,7 @@ func TestIdempotentAbortsOnError(t *testing.T) {
 		return nil
 	}), fast)
 	start(t, a)
-	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("x-1"))
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("x-1"))
 	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
 }
 
@@ -130,9 +130,9 @@ func TestIdempotentReleasesClaimOnPanic(t *testing.T) {
 			panic("boom")
 		}
 		return nil
-	}), fast, MaxAttempts(3))
+	}), fast, WithMaxAttempts(3))
 	start(t, a)
-	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("p-1"))
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("p-1"))
 	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
 }
 
@@ -161,7 +161,7 @@ func TestIdempotentLogsToAppLogger(t *testing.T) {
 	var calls atomic.Int32
 	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return nil }))
 	start(t, a)
-	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("l-1"))
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("l-1"))
 	waitFor(t, func() bool { return calls.Load() == 1 && pendingAcks(t, a, "billing") == 0 })
 	waitFor(t, func() bool { return strings.Contains(buf.String(), "idempotency complete failed") })
 }
@@ -170,9 +170,9 @@ func TestIdempotentManualAckAcksDuplicate(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	setupStream(t, a)
-	a.Use(Idempotent(NewMemoryStore(), IdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
+	a.Use(Idempotent(NewMemoryStore(), WithIdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
 	var calls atomic.Int32
-	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error { calls.Add(1); return m.Ack() }), ManualAck())
+	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error { calls.Add(1); return m.Ack() }), WithManualAck())
 	start(t, a)
 	h := Header{"X-Order-Id": []string{"same"}}
 	_, _ = a.PublishJS(context.Background(), "orders.a", order{ID: "1"}, WithHeader(h))
@@ -189,7 +189,7 @@ func TestIdempotentReplyDuplicateSkipsDLQ(t *testing.T) {
 	a := newApp(t, s)
 	setupDLQ(t, a)
 	a.Use(Idempotent(NewMemoryStore()))
-	a.Reply("once", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil }), DLQ("dlq.once"))
+	a.Reply("once", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil }), WithDLQ("dlq.once"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

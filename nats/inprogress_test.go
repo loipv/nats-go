@@ -16,7 +16,7 @@ func TestAutoInProgressPreventsRedelivery(t *testing.T) {
 		calls.Add(1)
 		time.Sleep(1500 * time.Millisecond)
 		return nil
-	}), AutoInProgress(), Concurrency(2))
+	}), WithAutoInProgress(), WithConcurrency(2))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
 	waitFor(t, func() bool { return calls.Load() >= 1 })
