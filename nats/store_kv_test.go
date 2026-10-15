@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +33,18 @@ func TestKVStoreEmptyBucketFailsStart(t *testing.T) {
 	NewKVStore(a, "")
 	if err := a.Start(context.Background()); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestKVStoreProvisionFailureFailsStart(t *testing.T) {
+	a := newApp(t, runServer(t))
+	NewKVStore(a, "bad bucket")
+	err := a.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "nats: start hook") || !strings.Contains(err.Error(), "nats: sync kv bucket") {
+		t.Fatalf("Start = %v", err)
+	}
+	if a.running() || a.Conn() != nil {
+		t.Fatal("app must not be running after a failed Start")
 	}
 }
 

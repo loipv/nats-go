@@ -534,10 +534,10 @@ func TestHookStopErrorsJoined(t *testing.T) {
 
 func TestHookStopWithExpiredContext(t *testing.T) {
 	a := newApp(t, runServer(t))
-	var ctxErr atomic.Value
+	var expired atomic.Bool
 	called := make(chan struct{})
 	a.Hook(Hook{OnStop: func(ctx context.Context) error {
-		ctxErr.Store(ctx.Err() != nil)
+		expired.Store(ctx.Err() != nil)
 		close(called)
 		return nil
 	}})
@@ -546,8 +546,65 @@ func TestHookStopWithExpiredContext(t *testing.T) {
 	cancel()
 	_ = a.Shutdown(ctx)
 	recv(t, called)
-	if ctxErr.Load() != true {
+	if !expired.Load() {
 		t.Fatal("OnStop must see the expired Shutdown ctx")
+	}
+}
+
+func TestHookRollbackStopErrorsJoined(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var l hookLog
+	errA := errors.New("flush")
+	a.Hook(l.hook("a", nil, errA))
+	a.Hook(l.hook("b", errors.New("boom"), nil))
+	err := a.Start(context.Background())
+	if !errors.Is(err, errA) || !strings.Contains(err.Error(), "nats: stop hook 0") || !strings.Contains(err.Error(), "nats: start hook 1: boom") {
+		t.Fatalf("Start: %v", err)
+	}
+}
+
+func TestHookWithoutOnStartCountsAsStarted(t *testing.T) {
+	var l hookLog
+	stopOnly := Hook{OnStop: func(context.Context) error { l.add("stop only"); return nil }}
+
+	rollback := newApp(t, runServer(t))
+	rollback.Hook(stopOnly)
+	rollback.Hook(l.hook("b", errors.New("boom"), nil))
+	if err := rollback.Start(context.Background()); err == nil {
+		t.Fatal("Start must fail")
+	}
+	if got := l.get(); !slices.Equal(got, []string{"start b", "stop only"}) {
+		t.Fatalf("rollback calls: %v", got)
+	}
+
+	shutdown := newApp(t, runServer(t))
+	shutdown.Hook(stopOnly)
+	start(t, shutdown)
+	if err := shutdown.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.get(); !slices.Equal(got, []string{"start b", "stop only", "stop only"}) {
+		t.Fatalf("shutdown calls: %v", got)
+	}
+}
+
+func TestHookWithoutOnStopIsSkipped(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var started atomic.Int32
+	a.Hook(Hook{OnStart: func(context.Context) error { started.Add(1); return nil }})
+	a.Hook(Hook{OnStart: func(context.Context) error { return errors.New("boom") }})
+	if err := a.Start(context.Background()); err == nil {
+		t.Fatal("Start must fail")
+	}
+
+	b := newApp(t, runServer(t))
+	b.Hook(Hook{OnStart: func(context.Context) error { started.Add(1); return nil }})
+	start(t, b)
+	if err := b.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := started.Load(); n != 2 {
+		t.Fatalf("started = %d, want 2", n)
 	}
 }
 
@@ -588,8 +645,8 @@ func TestHookShutdownDuringStart(t *testing.T) {
 		t.Fatal("Shutdown must fail while Start is blocked")
 	}
 	close(release)
-	if err := recv(t, startErr); err == nil {
-		t.Fatal("Start must fail after the aborting Shutdown")
+	if err := recv(t, startErr); err == nil || !strings.Contains(err.Error(), "cancelled by Shutdown") {
+		t.Fatalf("Start = %v, want cancelled by Shutdown", err)
 	}
 	if got := l.get(); !slices.Contains(got, "stop a") {
 		t.Fatalf("calls: %v", got)
