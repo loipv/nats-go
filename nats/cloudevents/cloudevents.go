@@ -187,23 +187,35 @@ func newID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// Handle subscribes fn to the events of eventType. The attributes are read
-// from the message headers; a message with invalid attributes fails with
-// nats.Terminal without calling fn, so the core logs it and, with a DLQ
-// option, dead-letters it. CloudEvents are one-way: Handle never replies; use
-// nats.Reply for request/reply.
-// An empty eventType, or one that Subject maps to "", is a registration error
-// that Start returns.
-func Handle[T any](e *Emitter, eventType string, fn func(context.Context, Event, *nats.Msg[T]) error, opts ...nats.HandlerOption) {
-	subject := ""
-	if eventType != "" {
-		subject = e.Subject(eventType)
+// EventHandler is a typed CloudEvents handler for Emitter.Handle. Create it
+// with Typed; the zero value is rejected by Start.
+type EventHandler struct{ h nats.MsgHandler }
+
+// Typed wraps fn for Emitter.Handle. The event attributes are read from the
+// message headers and the data is decoded into T with the app codec.
+func Typed[T any](fn func(context.Context, Event, *nats.Msg[T]) error) EventHandler {
+	if fn == nil {
+		return EventHandler{}
 	}
-	e.app.Subscribe(subject, nats.Typed(func(ctx context.Context, m *nats.Msg[T]) error {
+	return EventHandler{h: nats.Typed(func(ctx context.Context, m *nats.Msg[T]) error {
 		ev, err := FromHeader(m.Header)
 		if err != nil {
 			return nats.Terminal(err)
 		}
 		return fn(ctx, ev, m)
-	}), opts...)
+	})}
+}
+
+// Handle subscribes h to the events of eventType. A message with invalid
+// attributes fails with nats.Terminal without calling the handler, so the
+// core logs it and, with a DLQ option, dead-letters it. CloudEvents are
+// one-way: Handle never replies; use App.Reply for request/reply.
+// An empty eventType, or one that Subject maps to "", is a registration error
+// that Start returns.
+func (e *Emitter) Handle(eventType string, h EventHandler, opts ...nats.HandlerOption) {
+	subject := ""
+	if eventType != "" {
+		subject = e.Subject(eventType)
+	}
+	e.app.Subscribe(subject, h.h, opts...)
 }

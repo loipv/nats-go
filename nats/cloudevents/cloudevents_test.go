@@ -33,11 +33,11 @@ func TestRoundTrip(t *testing.T) {
 	ev := cloudevents.New(a, "https://orders.example.com")
 	got := make(chan cloudevents.Event, 1)
 	data := make(chan orderEvt, 1)
-	cloudevents.Handle(ev, "order.created", func(_ context.Context, e cloudevents.Event, m *nats.Msg[orderEvt]) error {
+	ev.Handle("order.created", cloudevents.Typed(func(_ context.Context, e cloudevents.Event, m *nats.Msg[orderEvt]) error {
 		got <- e
 		data <- m.Data
 		return nil
-	})
+	}))
 	start(t, a)
 	at := time.Date(2026, 10, 15, 8, 30, 0, 123456789, time.UTC)
 	err := ev.Publish(context.Background(), "order.created", orderEvt{ID: "o-1"}, cloudevents.WithID("e-1"), cloudevents.WithSubject("order/o-1"),
@@ -64,11 +64,11 @@ func TestBytesDataContentType(t *testing.T) {
 	ev := cloudevents.New(a, "src")
 	got := make(chan []byte, 1)
 	ct := make(chan string, 1)
-	cloudevents.Handle(ev, "blob", func(_ context.Context, e cloudevents.Event, m *nats.Msg[[]byte]) error {
+	ev.Handle("blob", cloudevents.Typed(func(_ context.Context, e cloudevents.Event, m *nats.Msg[[]byte]) error {
 		ct <- e.DataContentType
 		got <- m.Data
 		return nil
-	})
+	}))
 	start(t, a)
 	_ = ev.Publish(context.Background(), "blob", []byte{0, 1, 2})
 	if recv(t, ct) != "application/octet-stream" || !bytes.Equal(recv(t, got), []byte{0, 1, 2}) {
@@ -81,7 +81,7 @@ func TestMissingAttributesSkipsHandler(t *testing.T) {
 	a := newApp(t, s.ClientURL())
 	ev := cloudevents.New(a, "src")
 	got := make(chan string, 4)
-	cloudevents.Handle(ev, "x", func(_ context.Context, e cloudevents.Event, _ *nats.Msg[int]) error { got <- e.ID; return nil })
+	ev.Handle("x", cloudevents.Typed(func(_ context.Context, e cloudevents.Event, _ *nats.Msg[int]) error { got <- e.ID; return nil }))
 	start(t, a)
 	ctx := context.Background()
 	if err := a.Publish(ctx, "events.x", 1); err != nil { // no ce-* headers
@@ -109,7 +109,7 @@ func TestInvalidEventDoesNotDisturbPubAck(t *testing.T) {
 	})
 	ev := cloudevents.New(a, "src")
 	var called atomic.Int32
-	cloudevents.Handle(ev, "x", func(context.Context, cloudevents.Event, *nats.Msg[int]) error { called.Add(1); return nil })
+	ev.Handle("x", cloudevents.Typed(func(context.Context, cloudevents.Event, *nats.Msg[int]) error { called.Add(1); return nil }))
 	start(t, a)
 	for i := 0; i < 5; i++ {
 		ack, err := a.PublishJS(context.Background(), "events.x", 1) // no ce-* headers
@@ -207,8 +207,19 @@ func TestHandleEmptyTypeRegistrationError(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s.ClientURL())
 	ev := cloudevents.New(a, "src")
-	cloudevents.Handle(ev, "", func(context.Context, cloudevents.Event, *nats.Msg[int]) error { return nil })
+	ev.Handle("", cloudevents.Typed(func(context.Context, cloudevents.Event, *nats.Msg[int]) error { return nil }))
 	if err := a.Start(context.Background()); err == nil {
 		t.Fatal("want registration error")
+	}
+}
+
+func TestHandleRegistrationErrors(t *testing.T) {
+	a := newApp(t, runServer(t).ClientURL())
+	ev := cloudevents.New(a, "src")
+	ev.Handle("", cloudevents.Typed(func(context.Context, cloudevents.Event, *nats.Msg[[]byte]) error { return nil }))
+	ev.Handle("order.created", cloudevents.EventHandler{})
+	err := a.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "empty subject") || !strings.Contains(err.Error(), "nil handler") {
+		t.Fatal(err)
 	}
 }

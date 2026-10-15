@@ -30,13 +30,13 @@ func main() {
 	ce := cloudevents.New(app, "urn:example:shop")
 
 	got := make(chan struct{})
-	cloudevents.Handle(ce, "order.created", func(_ context.Context, ev cloudevents.Event, m *nats.Msg[OrderCreated]) error {
+	ce.Handle("order.created", cloudevents.Typed(func(_ context.Context, ev cloudevents.Event, m *nats.Msg[OrderCreated]) error {
 		fmt.Printf("event %s of type %s from %s\n", ev.ID, ev.Type, ev.Source)
 		fmt.Printf("  content type %s, region extension %q\n", ev.DataContentType, ev.Extensions["region"])
 		fmt.Printf("  order %s total %d\n", m.Data.ID, m.Data.Total)
 		close(got)
 		return nil
-	})
+	}))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {
