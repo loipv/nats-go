@@ -430,13 +430,28 @@ func loggerFrom(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// safeCall runs h and turns a panic into an error, so a faulty handler
+// panicError is the error a recovered handler panic becomes. Reply and
+// endpoint requesters see "internal error" instead of its text, which may
+// leak internals.
+type panicError struct {
+	v     any
+	stack string
+}
+
+func (e *panicError) Error() string {
+	if e.stack == "" {
+		return fmt.Sprintf("nats: panic: %v", e.v)
+	}
+	return fmt.Sprintf("nats: panic: %v\n%s", e.v, e.stack)
+}
+
+// safeCall runs h and turns a panic into a *panicError, so a faulty handler
 // cannot crash the worker goroutine and the process with it.
 func safeCall(ctx context.Context, h Handler, m *RawMsg, log *slog.Logger) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("nats: handler panicked", "subject", m.Subject, "panic", r, "stack", string(debug.Stack()))
-			err = fmt.Errorf("nats: panic: %v", r)
+			err = &panicError{v: r}
 		}
 	}()
 	return h(ctx, m)

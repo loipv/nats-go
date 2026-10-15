@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/micro"
 )
 
 func TestSubscribeWildcard(t *testing.T) {
@@ -98,18 +100,26 @@ func TestInvalidSubjectFailsStart(t *testing.T) {
 	}
 }
 
-func TestReplyPanicWithRecoverSendsSingleLineError(t *testing.T) {
-	s := runServer(t)
-	a := newApp(t, s)
-	a.Use(Recover())
-	a.Reply("boom", TypedReply(func(context.Context, *Msg[int]) (int, error) { panic("kaboom") }))
-	start(t, a)
-	r, err := a.Conn().Request("boom", []byte("1"), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Header.Get("Nats-Service-Error-Code") != "500" || r.Header.Get("Nats-Service-Error") != "nats: panic: kaboom" {
-		t.Fatalf("%q", r.Header)
+func TestPanicSendsInternalError(t *testing.T) {
+	boom := TypedReply(func(context.Context, *Msg[int]) (int, error) { panic("kaboom") })
+	for name, register := range map[string]func(*App){
+		"reply with Recover": func(a *App) { a.Use(Recover()); a.Reply("boom", boom) },
+		"reply":              func(a *App) { a.Reply("boom", boom) },
+		"endpoint":           func(a *App) { a.Service(micro.Config{Name: "svc", Version: "1.0.0"}).Endpoint("boom", boom) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := runServer(t)
+			a := newApp(t, s)
+			register(a)
+			start(t, a)
+			r, err := a.Conn().Request("boom", []byte("1"), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Header.Get("Nats-Service-Error-Code") != "500" || r.Header.Get("Nats-Service-Error") != "internal error" {
+				t.Fatalf("%q", r.Header)
+			}
+		})
 	}
 }
 

@@ -26,17 +26,6 @@ func TestSubscribePanicWithoutRecoverDoesNotCrash(t *testing.T) {
 	}
 }
 
-func TestReplyPanicWithoutRecoverReturns500(t *testing.T) {
-	s := runServer(t)
-	a := newApp(t, s)
-	a.Reply("p", TypedReply(func(context.Context, *Msg[int]) (int, error) { panic("kaboom") }))
-	start(t, a)
-	r, err := a.Conn().Request("p", []byte("1"), time.Second)
-	if err != nil || r.Header.Get("Nats-Service-Error-Code") != "500" || r.Header.Get("Nats-Service-Error") != "nats: panic: kaboom" {
-		t.Fatal(r, err)
-	}
-}
-
 func TestConsumePanicWithoutRecoverIsRetried(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)

@@ -75,7 +75,9 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 // group prefixes followed by WithEndpointSubject, or name if unset. Requests are
 // handled like Reply: the returned value is encoded and sent back, and an
 // error is sent as a micro service error (code 400 for Terminal errors, 500
-// otherwise), counted in the service STATS. On Shutdown, requests already
+// otherwise; a panic is sent as "internal error" with code 500), counted in
+// the service STATS. A request without a reply subject is dropped with a Warn
+// log and the handler is not called. On Shutdown, requests already
 // delivered to the endpoint are still handled and answered, within the
 // Shutdown deadline.
 //
@@ -148,6 +150,16 @@ func (e endpointReg) subject() string {
 	return strings.Join(append(parts, e.name), ".")
 }
 
+// healthName is the service name, the group prefixes and the endpoint name,
+// joined with ".".
+func (e endpointReg) healthName(service string) string {
+	parts := []string{service}
+	for _, g := range e.groups {
+		parts = append(parts, g.prefix)
+	}
+	return strings.Join(append(parts, e.name), ".")
+}
+
 // prepare checks the DLQ of every endpoint, as coreReg.prepare does.
 func (r *serviceReg) prepare(ctx context.Context, a *App) error {
 	for _, e := range r.endpoints {
@@ -182,7 +194,7 @@ func (r *serviceReg) start(_ context.Context, a *App) (runner, error) {
 		if e.cfg.endpointMetadata != nil {
 			opts = append(opts, micro.WithEndpointMetadata(e.cfg.endpointMetadata))
 		}
-		name := r.cfg.Name + "." + e.name
+		name := e.healthName(r.cfg.Name)
 		if err := parent.AddEndpoint(e.name, rn.handler(a, name, e), opts...); err != nil {
 			_ = svc.Stop()
 			return nil, fmt.Errorf("nats: service %q: %w", r.cfg.Name, err)
@@ -214,6 +226,10 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 	rc := e.cfg.retry(kindEndpoint)
 	log := a.opts.logger.With("handler", name, "kind", kindEndpoint)
 	return micro.HandlerFunc(func(req micro.Request) {
+		if req.Reply() == "" {
+			log.Warn("nats: request without reply subject dropped", "subject", req.Subject())
+			return
+		}
 		r.begin()
 		defer r.done()
 		m := &RawMsg{Subject: req.Subject(), Reply: req.Reply(), Header: Header(req.Headers()), Data: req.Data()}
@@ -221,7 +237,7 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 		switch {
 		case abandoned:
 		case err != nil:
-			desc := firstLine(err)
+			desc := errorDescription(err)
 			if desc == "" {
 				desc = "error"
 			}

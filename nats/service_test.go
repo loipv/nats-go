@@ -255,6 +255,48 @@ func TestServiceHealth(t *testing.T) {
 	}
 }
 
+func TestEndpointIgnoresMessageWithoutReply(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	var calls atomic.Int32
+	a.Service(micro.Config{Name: "svc", Version: "1.0.0"}).Endpoint("do", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
+		calls.Add(1)
+		return m.Data, nil
+	}))
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := a.Publish(ctx, "do", 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Fatal(calls.Load())
+	}
+	if _, err := a.Request(ctx, "do", 1, new(int)); err != nil || calls.Load() != 1 {
+		t.Fatal(err, calls.Load())
+	}
+}
+
+func TestEndpointHealthNamesIncludeGroups(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	svc := a.Service(micro.Config{Name: "orders", Version: "1.0.0"})
+	svc.Group("v1").Endpoint("get", TypedReply(echoInt))
+	svc.Group("v2").Endpoint("get", TypedReply(echoInt))
+	svc.Endpoint("ping", TypedReply(echoInt))
+	start(t, a)
+	got := map[string]bool{}
+	for _, st := range a.Health().Handlers {
+		if st.Kind == "endpoint" {
+			got[st.Name] = true
+		}
+	}
+	if len(got) != 3 || !got["orders.v1.get"] || !got["orders.v2.get"] || !got["orders.ping"] {
+		t.Fatal(got)
+	}
+}
+
 func TestEndpointNilHandler(t *testing.T) {
 	a := newApp(t, runServer(t))
 	svc := a.Service(micro.Config{Name: "orders", Version: "1.0.0", Description: "d"})

@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -27,6 +28,8 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 // value is encoded and sent back. A returned error is sent back in the
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.
+// A panic in h is sent as "internal error" with code 500; the panic and its
+// stack are only logged.
 //
 // A failed request is not retried by default. WithMaxAttempts, WithBackoff and
 // WithDLQ retry it in the worker, and the response is sent after the retries
@@ -187,9 +190,18 @@ func errorCode(err error) string {
 	return "500"
 }
 
+// errorDescription is the first line of err, or "internal error" for a panic,
+// whose text stays in the server log.
+func errorDescription(err error) string {
+	if errors.As(err, new(*panicError)) {
+		return "internal error"
+	}
+	return firstLine(err)
+}
+
 func respondError(nc *natsio.Conn, reply string, err error) error {
 	m := natsio.NewMsg(reply)
-	m.Header.Set("Nats-Service-Error", firstLine(err))
+	m.Header.Set("Nats-Service-Error", errorDescription(err))
 	m.Header.Set("Nats-Service-Error-Code", errorCode(err))
 	return nc.PublishMsg(m)
 }
