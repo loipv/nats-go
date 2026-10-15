@@ -9,7 +9,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Consume registers fn on an existing durable consumer (or one declared with
+// Consume registers h on an existing durable consumer (or one declared with
 // App.Consumer). Pull and push consumers are detected at Start. With
 // automatic ack (the default) a nil error acks; any other error naks the
 // message with a backoff delay until MaxAttempts is used up. A Terminal
@@ -37,7 +37,7 @@ func (a *App) Consume(stream, consumer string, h MsgHandler, opts ...HandlerOpti
 	a.register(&jsReg{kind: kindConsume, stream: stream, consumer: consumer, cfg: cfg, h: h.bind(a.opts.codec)})
 }
 
-// ConsumeOrdered registers fn on an ephemeral ordered consumer of stream.
+// ConsumeOrdered registers h on an ephemeral ordered consumer of stream.
 // Messages arrive in stream order and are never acked.
 //
 // A failed message is not retried by default. MaxAttempts, WithBackoff and

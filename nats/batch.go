@@ -26,10 +26,10 @@ func (e *BatchError) Error() string {
 	return fmt.Sprintf("nats: %d of batch failed", n)
 }
 
-// ConsumeBatch registers fn on an existing durable pull consumer (or one
+// ConsumeBatch registers h on an existing durable pull consumer (or one
 // declared with App.Consumer), passing it up to BatchSize messages at a
 // time. Messages that fail to decode or validate, or that were delivered
-// more than MaxAttempts times, are settled without reaching fn. With
+// more than MaxAttempts times, are settled without reaching h. With
 // automatic ack a nil error acks the whole batch, a *BatchError settles
 // only the listed messages as failed, and any other error fails every
 // message. Middleware does not apply to batch handlers.

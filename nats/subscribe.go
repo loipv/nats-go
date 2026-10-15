@@ -11,7 +11,7 @@ import (
 	natsio "github.com/nats-io/nats.go"
 )
 
-// Subscribe registers fn for messages on subject. Wildcards (* and >) and
+// Subscribe registers h for messages on subject. Wildcards (* and >) and
 // Queue are supported. Errors returned by fn are logged.
 //
 // Core NATS never redelivers, so a failed message is not retried by default.
@@ -23,7 +23,7 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 	registerCore(a, kindSubscribe, subject, h.bind, opts)
 }
 
-// Reply registers fn as the responder for requests on subject. The returned
+// Reply registers h as the responder for requests on subject. The returned
 // value is encoded and sent back. A returned error is sent back in the
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.

@@ -16,7 +16,7 @@
 //
 //	app, err := nats.New(nats.WithURL("nats://127.0.0.1:4222"))
 //	if err != nil { ... }
-//	nats.Subscribe(app, "orders.*", handleOrder)
+//	app.Subscribe("orders.*", nats.Typed(handleOrder))
 //	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 //	defer stop()
 //	if err := app.Run(ctx); err != nil { log.Fatal(err) }
@@ -38,12 +38,22 @@
 // (JSON by default; []byte is passed through untouched). When T or *T has a
 // Validate() error method it is called after decoding.
 //
-//   - Subscribe handles core NATS messages, with wildcards and Queue groups.
-//   - Reply answers requests; the returned value is encoded and sent back.
-//   - Consume handles a durable JetStream consumer; pull and push consumers
-//     are detected at Start.
-//   - ConsumeOrdered reads a stream in order through an ephemeral ordered
-//     consumer; it accepts only Concurrency(1) so order is kept.
+// Handlers are registered with App methods and wrapped in an adapter that
+// carries their type, because Go methods cannot have type parameters:
+// Typed for Subscribe, Consume and ConsumeOrdered, TypedReply for Reply and
+// service endpoints, TypedBatch for ConsumeBatch. T is inferred from the
+// handler:
+//
+//		app.Reply("billing.get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetInvoice]) (Invoice, error) {
+//			return load(ctx, m.Data.ID)
+//		}))
+//
+//	  - Subscribe handles core NATS messages, with wildcards and Queue groups.
+//	  - Reply answers requests; the returned value is encoded and sent back.
+//	  - Consume handles a durable JetStream consumer; pull and push consumers
+//	    are detected at Start.
+//	  - ConsumeOrdered reads a stream in order through an ephemeral ordered
+//	    consumer; it accepts only Concurrency(1) so order is kept.
 //
 // The error a handler returns decides what happens to the message:
 //
@@ -145,9 +155,12 @@
 //
 // # Publishing
 //
-// App.Publish sends fire-and-forget, Request waits for a typed reply (a
-// failed responder comes back as *ServiceError) and App.PublishJS waits for
-// the stream's ack, with MsgID for deduplication.
+// App.Publish sends fire-and-forget, App.Request waits for a reply and
+// decodes it into out (a failed responder comes back as *ServiceError) and
+// App.PublishJS waits for the stream's ack, with MsgID for deduplication.
+//
+//	var inv Invoice
+//	_, err := app.Request(ctx, "billing.get", GetInvoice{ID: "42"}, &inv)
 //
 // # Middleware
 //
@@ -164,8 +177,8 @@
 // STATS count. The Timeout, With, MaxAttempts, WithBackoff and DLQ options
 // apply; EndpointSubject and EndpointMetadata are specific to endpoints.
 //
-//	svc := nats.Service(app, micro.Config{Name: "inventory", Version: "1.0.0"})
-//	nats.Endpoint(svc.Group("inventory"), "get", getStock) // subject inventory.get
+//	svc := app.Service(micro.Config{Name: "inventory", Version: "1.0.0"})
+//	svc.Group("inventory").Endpoint("get", nats.TypedReply(getStock)) // subject inventory.get
 //
 // An endpoint handles one request at a time per instance, in micro's
 // goroutine; scale with more instances, which share a queue group.
