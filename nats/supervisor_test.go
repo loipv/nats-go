@@ -136,3 +136,30 @@ func TestWithRestartBackoffNil(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+// I2: nats.go recreates a deleted ordered consumer; health must not stay degraded.
+func TestOrderedConsumerRecoversAfterDelete(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	got := make(chan string, 4)
+	a.ConsumeOrdered("ORDERS", Typed(func(_ context.Context, m *Msg[order]) error { got <- m.Data.ID; return nil }))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "before"})
+	recv(t, got)
+	stream, _ := a.JetStream().Stream(context.Background(), "ORDERS")
+	names := stream.ConsumerNames(context.Background())
+	for name := range names.Name() {
+		if name != "billing" {
+			_ = stream.DeleteConsumer(context.Background(), name)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "after"})
+	if recv(t, got) != "after" {
+		t.Fatal("ordered consumer did not recover")
+	}
+	if st := a.Health(); st.Status != "ok" {
+		t.Fatalf("health %+v", st)
+	}
+}

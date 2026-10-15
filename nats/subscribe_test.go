@@ -154,3 +154,22 @@ func TestSubjectMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestSubscribePanicWithoutRecoverDoesNotCrash(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	got := make(chan string, 2)
+	a.Subscribe("p", Typed(func(_ context.Context, m *Msg[string]) error {
+		if m.Data == "boom" {
+			panic("boom")
+		}
+		got <- m.Data
+		return nil
+	}))
+	start(t, a)
+	_ = a.Publish(context.Background(), "p", "boom")
+	_ = a.Publish(context.Background(), "p", "ok")
+	if recv(t, got) != "ok" {
+		t.Fatal()
+	}
+}

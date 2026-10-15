@@ -111,3 +111,21 @@ func TestRespondOnHandBuiltMsg(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMsgAckOnCoreReturnsErrNotJetStream(t *testing.T) {
+	if err := (&Msg[[]byte]{}).Ack(); !errors.Is(err, ErrNotJetStream) {
+		t.Fatal(err)
+	}
+}
+
+func TestAttemptCore(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	got := make(chan int, 1)
+	a.Subscribe("a", Typed(func(_ context.Context, m *Msg[[]byte]) error { got <- m.Attempt(); return nil }))
+	start(t, a)
+	_ = a.Conn().Publish("a", nil)
+	if recv(t, got) != 1 {
+		t.Fatal()
+	}
+}

@@ -9,12 +9,6 @@ import (
 	natsio "github.com/nats-io/nats.go"
 )
 
-// Header is the NATS message header type.
-type Header = natsio.Header
-
-// RawMsg is an undecoded NATS message, as seen by middleware.
-type RawMsg = natsio.Msg
-
 // Option configures an App. Options are validated by New.
 type Option func(*options) error
 

@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -197,5 +198,137 @@ func TestRequestDecodeFailureReturnsReply(t *testing.T) {
 	reply, err := a.Request(reqCtx(t), "req.bad", "x", &inv)
 	if err == nil || reply == nil || string(reply.Data) != "not json" {
 		t.Fatal(reply, err)
+	}
+}
+
+func TestMessageEncodesAndSetsJSHeaders(t *testing.T) {
+	a, _ := New() // not started: Message needs no connection
+	m, err := a.Message("orders.x", order{ID: "1"}, WithHeader(Header{"X-A": []string{"1"}}), WithMsgID("m-1"), WithExpectLastSeq(7), WithExpectStream("ORDERS"), WithExpectLastSubjectSeq(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m.Data) != `{"id":"1"}` || m.Subject != "orders.x" {
+		t.Fatal(m.Subject, string(m.Data))
+	}
+	for k, v := range map[string]string{"X-A": "1", "Nats-Msg-Id": "m-1", "Nats-Expected-Last-Sequence": "7", "Nats-Expected-Stream": "ORDERS", "Nats-Expected-Last-Subject-Sequence": "3"} {
+		if m.Header.Get(k) != v {
+			t.Fatalf("%s=%q", k, m.Header.Get(k))
+		}
+	}
+	if _, err := a.Message("x", make(chan int)); err == nil {
+		t.Fatal("encode error expected")
+	}
+}
+
+func TestPublishJSExpectHeaderEnforced(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	start(t, a)
+	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithExpectLastSeq(42)); err == nil {
+		t.Fatal("wrong WithExpectLastSeq must be rejected by the server")
+	}
+	ack1, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("d"))
+	ack2, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("d"))
+	if !ack2.Duplicate || ack2.Sequence != ack1.Sequence {
+		t.Fatal(ack2)
+	}
+}
+
+func TestWrapPublishAppliesMiddlewareInOrder(t *testing.T) {
+	a, _ := New()
+	var trace []string
+	mk := func(n string) PublishMiddleware {
+		return func(next PublishFunc) PublishFunc {
+			return func(ctx context.Context, m *RawMsg) error {
+				trace = append(trace, n)
+				return next(ctx, m)
+			}
+		}
+	}
+	a.UsePublish(mk("p1"), mk("p2"))
+	_ = a.WrapPublish(func(context.Context, *RawMsg) error { trace = append(trace, "send"); return nil })(context.Background(), &RawMsg{})
+	if strings.Join(trace, ",") != "p1,p2,send" {
+		t.Fatal(trace)
+	}
+}
+
+// I3: handlers that run as soon as Start opens intake must be able to publish.
+func TestHandlerCanPublishDuringStartup(t *testing.T) {
+	s := runServer(t)
+	seed := newApp(t, s)
+	setupStream(t, seed)
+	start(t, seed)
+	for range 20 {
+		_, _ = seed.PublishJS(context.Background(), "orders.x", order{ID: "backlog"})
+	}
+	a := newApp(t, s)
+	var failed atomic.Int32
+	var handled atomic.Int32
+	a.Consume("ORDERS", "billing", Typed(func(ctx context.Context, _ *Msg[order]) error {
+		if err := a.Publish(ctx, "audit", nil); err != nil {
+			failed.Add(1)
+		}
+		handled.Add(1)
+		return nil
+	}))
+	// More registrations keep Start busy after billing has begun receiving.
+	for i := range 10 {
+		name := fmt.Sprintf("extra%d", i)
+		a.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: name, AckPolicy: jetstream.AckExplicitPolicy})
+		a.Consume("ORDERS", name, Typed(func(context.Context, *Msg[order]) error { return nil }))
+	}
+	start(t, a)
+	waitFor(t, func() bool { return handled.Load() == 20 })
+	if failed.Load() != 0 {
+		t.Fatalf("%d publishes failed during startup", failed.Load())
+	}
+}
+
+// A publish middleware that short-circuits must not panic Request.
+func TestRequestShortCircuitMiddlewareDoesNotPanic(t *testing.T) {
+	a := newApp(t, runServer(t))
+	a.UsePublish(func(PublishFunc) PublishFunc {
+		return func(context.Context, *RawMsg) error { return nil }
+	})
+	start(t, a)
+	if _, err := a.Request(context.Background(), "x", 1, new(int)); err == nil {
+		t.Fatal("want error when no reply was produced")
+	}
+}
+
+func TestPublishJSWithJSPublishOpts(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	start(t, a)
+	ctx := context.Background()
+	if _, err := a.PublishJS(ctx, "orders.x", order{ID: "1"}, WithMsgID("m-1")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := a.PublishJS(ctx, "orders.x", order{ID: "2"}, WithJSPublishOpts(jetstream.WithExpectLastMsgID("other")))
+	if err == nil {
+		t.Fatal("expected wrong last msg id to fail")
+	}
+	if _, err := a.PublishJS(ctx, "orders.x", order{ID: "2"}, WithJSPublishOpts(jetstream.WithExpectLastMsgID("m-1"))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJSPublishOptsRejectedOutsidePublishJS(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	start(t, a)
+	ctx := context.Background()
+	opt := WithJSPublishOpts(jetstream.WithMsgID("x"))
+	_, msgErr := a.Message("x", 1, opt)
+	_, reqErr := a.Request(ctx, "x", 1, nil, opt)
+	_, batchErr := a.PublishJSBatch(ctx, []BatchMsg{{Subject: "x", Data: 1, Opts: []PubOption{opt}}})
+	for name, err := range map[string]error{
+		"Publish": a.Publish(ctx, "x", 1, opt), "Request": reqErr, "Message": msgErr, "PublishJSBatch": batchErr,
+	} {
+		if err == nil || !strings.Contains(err.Error(), "WithJSPublishOpts") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

@@ -3,10 +3,14 @@ package nats
 import (
 	"context"
 	"errors"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	natstest "github.com/nats-io/nats-server/v2/test"
+	natsio "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestNewValidatesOptions(t *testing.T) {
@@ -81,4 +85,328 @@ func TestTokenAuth(t *testing.T) {
 	}
 	a := newApp(t, s, WithToken("s3cret"))
 	start(t, a)
+}
+
+// C1: a ctx-aware handler plus a queued message must not make Shutdown ignore its deadline.
+func TestShutdownDeadlineWithQueuedMessageCore(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	started := make(chan struct{}, 2)
+	a.Subscribe("block", Typed(func(ctx context.Context, _ *Msg[[]byte]) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}))
+	start(t, a)
+	_ = a.Conn().Publish("block", nil)
+	_ = a.Conn().Publish("block", nil)
+	<-started
+	time.Sleep(50 * time.Millisecond) // second message is now blocked in dispatch
+	assertShutdownBounded(t, a)
+}
+
+func TestShutdownDeadlineWithQueuedMessageJS(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	started := make(chan struct{}, 2)
+	a.Consume("ORDERS", "billing", Typed(func(ctx context.Context, _ *Msg[order]) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "2"})
+	<-started
+	time.Sleep(50 * time.Millisecond)
+	assertShutdownBounded(t, a)
+}
+
+func assertShutdownBounded(t *testing.T, a *App) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.Shutdown(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown hung past its deadline")
+	}
+}
+
+// I3: a failing Start must not have handled any message on earlier registrations.
+func TestFailedStartHandlesNothing(t *testing.T) {
+	cases := map[string]func(a *App){
+		"missing consumer": func(a *App) {
+			a.Consume("ORDERS", "nope", Typed(func(context.Context, *Msg[order]) error { return nil }))
+		},
+		"bad subject": func(a *App) {
+			a.Subscribe("foo..bar", Typed(func(context.Context, *Msg[[]byte]) error { return nil }))
+		},
+	}
+	for name, addFailing := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := runServer(t)
+			seed := newApp(t, s)
+			setupStream(t, seed)
+			start(t, seed)
+			_, _ = seed.PublishJS(context.Background(), "orders.x", order{ID: "backlog"})
+
+			a := newApp(t, s)
+			var calls atomic.Int32
+			a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return nil }))
+			addFailing(a)
+			if err := a.Start(context.Background()); err == nil {
+				t.Fatal("Start must fail")
+			}
+			time.Sleep(200 * time.Millisecond)
+			if calls.Load() != 0 {
+				t.Fatal("handler ran during a failed Start")
+			}
+		})
+	}
+}
+
+// I4: the default must keep reconnecting; a user option still wins.
+func TestDefaultReconnectsForever(t *testing.T) {
+	maxReconnect := func(a *App) int {
+		o := natsio.GetDefaultOptions()
+		for _, opt := range a.opts.natsOpts {
+			_ = opt(&o)
+		}
+		return o.MaxReconnect
+	}
+	a, _ := New()
+	if got := maxReconnect(a); got != -1 {
+		t.Fatal("default MaxReconnect", got)
+	}
+	b, _ := New(WithNATSOptions(natsio.MaxReconnects(5)))
+	if got := maxReconnect(b); got != 5 {
+		t.Fatal("user MaxReconnect", got)
+	}
+}
+
+// blockedApp starts an app whose "stuck" handler has received one message and
+// blocks until release is closed.
+func blockedApp(t *testing.T) (a *App, release chan struct{}) {
+	t.Helper()
+	a = newApp(t, runServer(t))
+	started, release := make(chan struct{}), make(chan struct{})
+	a.Subscribe("stuck", Typed(func(context.Context, *Msg[[]byte]) error {
+		close(started)
+		<-release
+		return nil
+	}))
+	start(t, a)
+	_ = a.Conn().Publish("stuck", nil)
+	<-started
+	return a, release
+}
+
+func shutdownAsync(a *App, ctx context.Context) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- a.Shutdown(ctx) }()
+	return done
+}
+
+func TestConcurrentShutdownWaits(t *testing.T) {
+	a, release := blockedApp(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first := shutdownAsync(a, ctx)
+	time.Sleep(50 * time.Millisecond)
+	second := shutdownAsync(a, ctx)
+	expectNone(t, second, 150*time.Millisecond)
+	close(release)
+	if err := recv(t, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := recv(t, first); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentShutdownOwnDeadline(t *testing.T) {
+	a, release := blockedApp(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first := shutdownAsync(a, ctx)
+	time.Sleep(50 * time.Millisecond)
+	sctx, scancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer scancel()
+	if err := a.Shutdown(sctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := recv(t, first); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type slowDialer struct{ delay time.Duration }
+
+func (d slowDialer) Dial(network, address string) (net.Conn, error) {
+	time.Sleep(d.delay)
+	return net.Dial(network, address)
+}
+
+func TestHealthDuringStart(t *testing.T) {
+	a := newApp(t, runServer(t), WithNATSOptions(natsio.SetCustomDialer(slowDialer{500 * time.Millisecond})))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := make(chan error, 1)
+	go func() { started <- a.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	health := make(chan Report, 1)
+	go func() { health <- a.Health() }()
+	select {
+	case r := <-health:
+		if r.Ready || r.Status != "down" {
+			t.Fatalf("got %+v", r)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Health blocked during Start")
+	}
+	if err := recv(t, started); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
+}
+
+// failingApp returns an app whose Start fails: consumer "missing" does not exist.
+func failingApp(t *testing.T) *App {
+	t.Helper()
+	a := newApp(t, runServer(t))
+	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
+	a.Consume("ORDERS", "missing", Typed(func(context.Context, *Msg[[]byte]) error { return nil }))
+	if err := a.Start(context.Background()); err == nil {
+		t.Fatal("want start error")
+	}
+	return a
+}
+
+func TestConnNilAfterFailedStart(t *testing.T) {
+	a := failingApp(t)
+	if a.Conn() != nil || a.JetStream() != nil {
+		t.Fatal("Conn and JetStream must be nil after a failed Start")
+	}
+}
+
+func TestStartRetryAfterFailure(t *testing.T) {
+	a := failingApp(t)
+	b, err := New(WithURL(a.opts.url))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start(t, b)
+	if _, err := b.JetStream().CreateOrUpdateConsumer(context.Background(), "ORDERS", jetstream.ConsumerConfig{Durable: "missing", AckPolicy: jetstream.AckExplicitPolicy}); err != nil {
+		t.Fatal(err)
+	}
+	start(t, a)
+}
+
+func TestConcurrentStart(t *testing.T) {
+	a := newApp(t, runServer(t), WithNATSOptions(natsio.SetCustomDialer(slowDialer{300 * time.Millisecond})))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first := make(chan error, 1)
+	go func() { first <- a.Start(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	if err := a.Start(ctx); !errors.Is(err, ErrAlreadyStarted) {
+		t.Fatal(err)
+	}
+	if err := recv(t, first); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
+}
+
+func TestShutdownDuringStart(t *testing.T) {
+	a := newApp(t, runServer(t), WithNATSOptions(natsio.SetCustomDialer(slowDialer{500 * time.Millisecond})))
+	started := make(chan error, 1)
+	go func() { started <- a.Start(context.Background()) }()
+	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A Shutdown that did not wait for Start finds no connection, or one
+	// that is still open.
+	if nc := a.Conn(); nc == nil || !nc.IsClosed() || a.Health().Ready {
+		t.Fatal("Shutdown must wait for Start and shut the started app down")
+	}
+	if err := recv(t, started); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShutdownDuringStartDeadline(t *testing.T) {
+	a := newApp(t, runServer(t), WithNATSOptions(natsio.SetCustomDialer(slowDialer{500 * time.Millisecond})))
+	started := make(chan error, 1)
+	go func() { started <- a.Start(context.Background()) }()
+	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := a.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if err := recv(t, started); err == nil {
+		t.Fatal("Start must fail after a cancelling Shutdown")
+	}
+	if a.Health().Ready || a.Conn() != nil {
+		t.Fatal("app must not be running")
+	}
+}
+
+func TestShutdownWaitsForInflight(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	started, finished := make(chan struct{}), make(chan struct{})
+	a.Subscribe("slow", Typed(func(context.Context, *Msg[[]byte]) error {
+		close(started)
+		time.Sleep(200 * time.Millisecond)
+		close(finished)
+		return nil
+	}))
+	start(t, a)
+	_ = a.Conn().Publish("slow", nil)
+	<-started
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("shutdown returned before handler finished")
+	}
+}
+
+func TestShutdownDeadlineExceeded(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	a.Subscribe("stuck", Typed(func(context.Context, *Msg[[]byte]) error {
+		close(started)
+		<-release
+		return nil
+	}))
+	start(t, a)
+	_ = a.Conn().Publish("stuck", nil)
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	if err := a.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if time.Since(begin) > time.Second || !a.Conn().IsClosed() {
+		t.Fatal("must return promptly and close conn")
+	}
 }

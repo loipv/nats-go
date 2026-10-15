@@ -2,11 +2,13 @@ package nats
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -182,4 +184,48 @@ func TestConsumeStoppedWhenConsumerDeleted(t *testing.T) {
 		st := a.runners[0].status()
 		return st.State == "restarting" && st.LastError != ""
 	})
+}
+
+func TestConsumePanicWithoutRecoverIsRetried(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	var calls atomic.Int32
+	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error {
+		if calls.Add(1) == 1 {
+			panic("first try")
+		}
+		return nil
+	}), WithBackoff(func(int) time.Duration { return 50 * time.Millisecond }))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
+}
+
+func TestConsumeTermCarriesReason(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error {
+		return Terminal(errors.New("bad input\nsecret stack"))
+	}))
+	start(t, a)
+	reasons := make(chan string, 1)
+	sub, err := a.Conn().Subscribe("$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.ORDERS.billing", func(m *natsio.Msg) {
+		var adv struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(m.Data, &adv)
+		reasons <- adv.Reason
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Unsubscribe()
+	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := recv(t, reasons); r != "bad input" {
+		t.Fatalf("reason = %q", r)
+	}
 }
