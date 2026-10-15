@@ -12,6 +12,12 @@ import (
 
 // Subscribe registers fn for messages on subject. Wildcards (* and >) and
 // Queue are supported. Errors returned by fn are logged.
+//
+// Core NATS never redelivers, so a failed message is not retried by default.
+// MaxAttempts, WithBackoff and DLQ retry it in the worker, waiting for the
+// backoff between attempts and keeping the worker busy meanwhile. Unlimited
+// can stall the subscription while failures last: with every worker retrying,
+// pending messages pile up and nats.go may report a slow consumer.
 func Subscribe[T any](app *App, subject string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
 	registerCore(app, kindSubscribe, subject, typed(app.opts.codec, fn), opts)
 }
@@ -20,6 +26,11 @@ func Subscribe[T any](app *App, subject string, fn func(context.Context, *Msg[T]
 // value is encoded and sent back. A returned error is sent back in the
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.
+//
+// A failed request is not retried by default. MaxAttempts, WithBackoff and
+// DLQ retry it in the worker, and the response is sent after the retries
+// finish, so the total retry time must fit within the requester's timeout.
+// Unlimited can stall the subscription while failures last.
 func Reply[Req, Resp any](app *App, subject string, fn func(context.Context, *Msg[Req]) (Resp, error), opts ...HandlerOption) {
 	h := typed(app.opts.codec, func(ctx context.Context, m *Msg[Req]) error {
 		resp, err := fn(ctx, m)
@@ -90,7 +101,7 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			return
 		}
 		out := &reply{}
-		err, abandoned := a.handleLocal(context.WithValue(ctx, replyKey{}, out), h, m, rc, stopping, dlqSource{}, log)
+		abandoned, err := a.handleLocal(context.WithValue(ctx, replyKey{}, out), h, m, rc, stopping, dlqSource{}, log)
 		if abandoned {
 			return
 		}

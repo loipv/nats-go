@@ -105,18 +105,18 @@ func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err err
 // uses up rc's attempts, waiting rc.backoff between attempts. It returns the
 // last error and the number of attempts made. A wait cut short by stopping
 // abandons the message.
-func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *slog.Logger) (err error, attempts int, abandoned bool) {
+func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *slog.Logger) (attempts int, abandoned bool, err error) {
 	for attempt := 1; ; attempt++ {
 		err = safeCall(withAttempt(ctx, attempt), h, m, log)
 		if err == nil || IsTerminal(err) || rc.exhausted(attempt) {
-			return err, attempt, false
+			return attempt, false, err
 		}
 		log.Error("nats: handler failed, will retry", "subject", m.Subject, "attempt", attempt, "error", err)
 		select {
 		case <-time.After(rc.backoff(attempt)):
 		case <-stopping:
 			log.Warn("nats: retry abandoned, shutting down", "subject", m.Subject)
-			return err, attempt, true
+			return attempt, true, err
 		}
 	}
 }
@@ -124,14 +124,14 @@ func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConf
 // handleLocal runs h with in-process retries and, when the message finally
 // fails, logs it and publishes it to the DLQ if one is set. It returns the
 // final error and whether the message was abandoned.
-func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *slog.Logger) (err error, abandoned bool) {
-	err, attempts, abandoned := a.retryLocal(ctx, h, m, rc, stopping, log)
+func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *slog.Logger) (abandoned bool, err error) {
+	attempts, abandoned, err := a.retryLocal(ctx, h, m, rc, stopping, log)
 	if err == nil || abandoned {
-		return err, abandoned
+		return abandoned, err
 	}
 	if rc.dlq == "" {
 		log.Error("nats: handler failed", "subject", m.Subject, "attempt", attempts, "error", err)
-		return err, false
+		return false, err
 	}
 	src.deliveries = attempts
 	if perr := a.publishDLQ(ctx, rc.dlq, m, err, src); perr != nil {
@@ -139,5 +139,5 @@ func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryCon
 	} else {
 		log.Error("nats: handler failed, message sent to DLQ", "subject", m.Subject, "attempt", attempts, "error", err, "dlq", rc.dlq)
 	}
-	return err, false
+	return false, err
 }

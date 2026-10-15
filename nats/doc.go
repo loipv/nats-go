@@ -55,6 +55,89 @@
 // With ManualAck the handler acks itself through Msg.Ack, Nak, NakWithDelay,
 // Term and InProgress, and the returned error is only logged.
 //
+// # Reliability
+//
+// Failed messages are retried with a backoff and, when they run out of
+// attempts, sent to a dead-letter queue. MaxAttempts, WithBackoff and DLQ
+// configure this for every kind of handler; they cannot be combined with
+// ManualAck. Msg.Attempt returns the current attempt, starting at 1.
+//
+// For Consume and ConsumeBatch the server redelivers: a failed message is
+// naked with a delay from the backoff, by default ExponentialBackoff(1s, 1m),
+// and retried without limit. For Subscribe, Reply and ConsumeOrdered there is
+// no redelivery, so a failed message is not retried unless MaxAttempts is set;
+// the library then retries in the worker, waiting for the backoff between
+// attempts. Unlimited is allowed but can stall the subscription while
+// failures last, Reply must finish its retries within the requester's timeout,
+// and ConsumeOrdered stalls the whole stream while it retries, which keeps
+// the order.
+//
+// What happens to a message of a Consume or ConsumeBatch handler with
+// automatic ack (attempt is the JetStream delivery count):
+//
+//	handler result                                no DLQ              DLQ
+//	nil                                           Ack                 Ack
+//	error, attempts left                          NakWithDelay        NakWithDelay
+//	error, last attempt                           log, Term           publish to DLQ, Term
+//	Terminal(err), decode or validation failure   Term                publish to DLQ, Term
+//	delivered more than MaxAttempts times         Term, no handler    publish to DLQ, Term, no handler
+//	DLQ publish fails                             -                   log, NakWithDelay
+//
+// A panic in a handler is recovered by the worker and handled like any other
+// error. Recover only turns the panic into an error earlier, for the
+// middleware around it.
+//
+// The DLQ subject must be captured by a stream you declare; Start fails
+// otherwise. The dead-lettered message keeps its payload and headers and gains
+// Nats-DLQ-Error, Nats-DLQ-Subject and Nats-DLQ-Deliveries, plus, for
+// JetStream consumers, Nats-DLQ-Stream, Nats-DLQ-Consumer, Nats-DLQ-Sequence
+// and Nats-DLQ-Msg-Id (the original Nats-Msg-Id). Publishing the same message
+// again does not create a duplicate within the DLQ stream's Duplicates window.
+// For Consume and ConsumeBatch with a finite MaxAttempts, the consumer's
+// MaxDeliver must be -1 or greater than MaxAttempts, or Start fails.
+//
+// AutoInProgress sends in-progress signals every AckWait/2 while a Consume or
+// ConsumeBatch handler runs, so a slow handler is not redelivered; combine it
+// with Timeout.
+//
+// Idempotent is a middleware that skips messages whose key (by default the
+// Nats-Msg-Id header, see IdempotencyKey) was already processed. It claims the
+// key with an IdempotencyStore, runs the handler, then marks the key done, or
+// releases the claim if the handler fails or panics. NewMemoryStore is
+// correct for a single instance. NewKVStore keeps the keys in a JetStream
+// key-value bucket and is correct across instances; it needs nats-server 2.11
+// or later and rounds every TTL up to a whole second. ClaimTTL must exceed
+// the worst-case handler duration, because claims are released by key and
+// carry no owner. Register it after Recover:
+//
+//	app.Use(nats.Recover(), nats.Idempotent(nats.NewKVStore(app, "IDEMPOTENCY")))
+//
+// ConsumeBatch passes up to BatchSize messages (waiting at most BatchWait) to
+// one call on a pull consumer. Return nil to ack them all, a *BatchError to
+// fail only the listed indexes, or any other error to fail them all. Failed
+// messages follow the table above. Middleware does not apply to batches, and
+// Idempotent cannot be used with them.
+//
+// Consume and ConsumeBatch handlers are supervised: when the consumer or its
+// stream is deleted, the handler goes to the "restarting" state, recreates
+// whatever was declared with App.Stream and App.Consumer, and resumes, waiting
+// WithRestartBackoff between attempts (default ExponentialBackoff(1s, 30s))
+// and trying until it succeeds or the App shuts down. HandlerStatus.Restarts
+// counts the restarts, and App.Health reports "degraded" meanwhile. A push
+// consumer should set IdleHeartbeat: without it a deleted push consumer cannot
+// be detected.
+//
+// # Behaviour changes in M2
+//
+// Three behaviours differ from M1:
+//
+//   - A failed message of a Consume handler is naked with a delay from the
+//     default backoff ExponentialBackoff(1s, 1m) instead of immediately.
+//   - A panic in a handler no longer crashes the process; it is recovered and
+//     treated as an error.
+//   - A deleted consumer makes the handler "restarting" and recovers, instead
+//     of leaving it "stopped" for good.
+//
 // # Publishing
 //
 // App.Publish sends fire-and-forget, Request waits for a typed reply (a

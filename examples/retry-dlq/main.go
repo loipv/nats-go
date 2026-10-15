@@ -1,0 +1,133 @@
+// Command retry-dlq retries failing messages with exponential backoff and
+// sends the ones that run out of attempts to a dead-letter queue. It covers a
+// JetStream consumer (the server redelivers after the backoff) and a core
+// subscription (the library retries in process), then reads the DLQ stream
+// and prints the Nats-DLQ-* headers.
+//
+//	nats-server -js &
+//	go run ./examples/retry-dlq
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/loipv/nats-go/nats"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+type Payment struct {
+	ID     string `json:"id"`
+	Amount int    `json:"amount"`
+	// FailUntil is the attempt that finally succeeds; 0 means never.
+	FailUntil int `json:"fail_until"`
+}
+
+func main() {
+	app, err := nats.New(nats.WithURL(natsURL()))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// The DLQ is an ordinary stream that you declare: Start fails if no
+	// stream captures the DLQ subject.
+	app.Stream(jetstream.StreamConfig{Name: "PAYMENTS", Subjects: []string{"payments.>"}})
+	app.Stream(jetstream.StreamConfig{Name: "DLQ", Subjects: []string{"dlq.>"}})
+	app.Consumer("PAYMENTS", jetstream.ConsumerConfig{Durable: "charger", AckPolicy: jetstream.AckExplicitPolicy})
+
+	// JetStream: up to 3 deliveries, 200ms then 400ms between them (with
+	// jitter), then the message goes to dlq.payments and is termed.
+	nats.Consume(app, "PAYMENTS", "charger", func(_ context.Context, m *nats.Msg[Payment]) error {
+		fmt.Printf("charger: %s attempt %d\n", m.Data.ID, m.Attempt())
+		if m.Data.FailUntil > 0 && m.Attempt() >= m.Data.FailUntil {
+			fmt.Printf("charger: %s charged\n", m.Data.ID)
+			return nil
+		}
+		return errors.New("card gateway unavailable")
+	},
+		nats.MaxAttempts(3),
+		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, 2*time.Second)),
+		nats.DLQ("dlq.payments"),
+	)
+
+	// Core NATS never redelivers, so the library retries in the worker:
+	// 2 attempts, then the message goes to dlq.notify.
+	nats.Subscribe(app, "notify.send", func(_ context.Context, m *nats.Msg[Payment]) error {
+		fmt.Printf("notifier: %s attempt %d\n", m.Data.ID, m.Attempt())
+		return errors.New("mail server down")
+	},
+		nats.MaxAttempts(2),
+		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, 2*time.Second)),
+		nats.DLQ("dlq.notify"),
+	)
+
+	// Read the DLQ: only messages dead-lettered during this run.
+	var mu sync.Mutex
+	var dead []string
+	deadLettered := make(chan struct{}, 2)
+	nats.ConsumeOrdered(app, "DLQ", func(_ context.Context, m *nats.Msg[Payment]) error {
+		var b strings.Builder
+		fmt.Fprintf(&b, "dlq: %s\n", m.Data.ID)
+		var keys []string
+		for k := range m.Header {
+			if strings.HasPrefix(k, "Nats-DLQ-") {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(&b, "  %s: %s\n", k, m.Header.Get(k))
+		}
+		mu.Lock()
+		dead = append(dead, b.String())
+		mu.Unlock()
+		deadLettered <- struct{}{}
+		return nil
+	}, nats.DeliverPolicy(jetstream.DeliverNewPolicy))
+
+	ctx := context.Background()
+	if err := app.Start(ctx); err != nil {
+		log.Fatal(err)
+	}
+	defer app.Shutdown(ctx)
+
+	run := time.Now().UnixNano()
+	flaky := Payment{ID: fmt.Sprintf("flaky-%d", run), Amount: 10, FailUntil: 2}
+	broken := Payment{ID: fmt.Sprintf("broken-%d", run), Amount: 20}
+	mail := Payment{ID: fmt.Sprintf("mail-%d", run), Amount: 30}
+	for _, p := range []Payment{flaky, broken} {
+		if _, err := app.PublishJS(ctx, "payments.charge", p, nats.MsgID(p.ID)); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if err := app.Publish(ctx, "notify.send", mail); err != nil {
+		log.Fatal(err)
+	}
+
+	for range 2 {
+		select {
+		case <-deadLettered:
+		case <-time.After(20 * time.Second):
+			log.Fatal("timed out waiting for the DLQ")
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, d := range dead {
+		fmt.Print(d)
+	}
+}
+
+func natsURL() string {
+	if u := os.Getenv("NATS_URL"); u != "" {
+		return u
+	}
+	return "nats://127.0.0.1:4222"
+}

@@ -31,7 +31,10 @@ func IdempotencyKey(fn func(*RawMsg) string) IdempotencyOption {
 	return func(c *idemConfig) { c.key = fn }
 }
 
-// ClaimTTL sets how long an in-flight claim lasts (default 1 minute).
+// ClaimTTL sets how long an in-flight claim lasts (default 1 minute). It must
+// exceed the worst-case handler duration: claims are released by key, without
+// an ownership token, so a handler that outlives its claim can have its
+// duplicate admitted and its claim released by the other delivery.
 func ClaimTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.claimTTL = d } }
 
 // DoneTTL sets how long a completed key is remembered (default 24 hours).

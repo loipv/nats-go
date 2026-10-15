@@ -25,8 +25,9 @@ type Msg[T any] struct {
 	attempt int
 }
 
-// Attempt returns the 1-based delivery attempt of the message: the JetStream
-// delivery count, or 1 for core messages.
+// Attempt returns the 1-based attempt of the message: the JetStream delivery
+// count for Consume, or the in-process attempt number for handlers retried
+// by MaxAttempts, 1 otherwise.
 func (m *Msg[T]) Attempt() int { return m.attempt }
 
 func (m *Msg[T]) jsMsg() (jetstream.Msg, error) {

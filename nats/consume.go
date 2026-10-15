@@ -15,6 +15,10 @@ import (
 // message with a backoff delay until MaxAttempts is used up. A Terminal
 // error, or the last failed attempt, terms the message after publishing it
 // to the DLQ if one is set.
+//
+// Push consumers should set IdleHeartbeat in their ConsumerConfig: without
+// it a deleted push consumer cannot be detected, so the handler is not
+// restarted.
 func Consume[T any](app *App, stream, consumer string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindConsume, opts)
 	if err == nil && (stream == "" || consumer == "") {
@@ -32,6 +36,10 @@ func Consume[T any](app *App, stream, consumer string, fn func(context.Context, 
 
 // ConsumeOrdered registers fn on an ephemeral ordered consumer of stream.
 // Messages arrive in stream order and are never acked.
+//
+// A failed message is not retried by default. MaxAttempts, WithBackoff and
+// DLQ retry it in process; the whole stream waits while a message is retried,
+// which keeps the order. Unlimited can stall the stream while failures last.
 func ConsumeOrdered[T any](app *App, stream string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindOrdered, opts)
 	if err == nil && stream == "" {
