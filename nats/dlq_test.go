@@ -161,6 +161,13 @@ func TestStartChecks(t *testing.T) {
 		"core DLQ no stream": func(a *App) {
 			Subscribe(a, "x", func(context.Context, *Msg[[]byte]) error { return nil }, DLQ("nowhere.x"))
 		},
+		// orders.dlq is captured by ORDERS, so only the subject match can fail Start.
+		"subscribe DLQ matches own subject": func(a *App) {
+			Subscribe(a, "orders.*", func(context.Context, *Msg[[]byte]) error { return nil }, DLQ("orders.dlq"))
+		},
+		"reply DLQ matches own subject": func(a *App) {
+			Reply(a, "orders.>", func(context.Context, *Msg[[]byte]) ([]byte, error) { return nil, nil }, DLQ("orders.dlq"))
+		},
 	}
 	for name, add := range cases {
 		t.Run(name, func(t *testing.T) {

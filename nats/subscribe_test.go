@@ -112,3 +112,31 @@ func TestReplyPanicWithRecoverSendsSingleLineError(t *testing.T) {
 		t.Fatalf("%q", r.Header)
 	}
 }
+
+func TestSubjectMatches(t *testing.T) {
+	for _, c := range []struct {
+		pattern, subject string
+		want             bool
+	}{
+		{"a.b", "a.b", true},
+		{"a.b", "a.c", false},
+		{"a.b", "a.b.c", false},
+		{"a.b.c", "a.b", false},
+		{"a.*", "a.b", true},
+		{"a.*", "a.b.c", false},
+		{"*.b", "a.b", true},
+		{"a.>", "a.b", true},
+		{"a.>", "a.b.c", true},
+		{"a.>", "a", false},
+		{">", "a", true},
+		{"*", "a.b", false},
+		{"a.*.c", "a.b.c", true},
+		{"a.*.c", "a.b.d", false},
+		{"dlq.>", "dlq.orders", true},
+		{"orders", "dlq.orders", false},
+	} {
+		if got := subjectMatches(c.pattern, c.subject); got != c.want {
+			t.Errorf("subjectMatches(%q, %q) = %v, want %v", c.pattern, c.subject, got, c.want)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -74,15 +75,34 @@ type coreReg struct {
 	h       Handler
 }
 
-// prepare checks the DLQ stream, if any.
+// prepare checks the DLQ, if any: a DLQ subject the handler subscribes to
+// would feed every dead-lettered message back to it.
 func (r *coreReg) prepare(ctx context.Context, a *App) error {
 	if r.cfg.dlq == "" {
 		return nil
+	}
+	if subjectMatches(r.subject, r.cfg.dlq) {
+		return fmt.Errorf("nats: %s %q: DLQ subject %q is matched by the handler's own subject", r.kind, r.subject, r.cfg.dlq)
 	}
 	if err := a.checkDLQ(ctx, r.cfg.dlq, ""); err != nil {
 		return fmt.Errorf("nats: %s %q: %w", r.kind, r.subject, err)
 	}
 	return nil
+}
+
+// subjectMatches reports whether subject is matched by pattern, which may
+// contain the * and > wildcards.
+func subjectMatches(pattern, subject string) bool {
+	p, s := strings.Split(pattern, "."), strings.Split(subject, ".")
+	for i, tok := range p {
+		if tok == ">" {
+			return len(s) > i
+		}
+		if i >= len(s) || (tok != "*" && tok != s[i]) {
+			return false
+		}
+	}
+	return len(p) == len(s)
 }
 
 func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
