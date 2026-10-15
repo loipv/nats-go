@@ -62,7 +62,7 @@ func FromHeader(h nats.Header) (Event, error) {
 	}
 	for k, v := range h {
 		name, ok := strings.CutPrefix(k, prefix)
-		if !ok || len(v) == 0 || standard[name] {
+		if !ok || len(v) == 0 || isStandard(name) {
 			continue
 		}
 		if e.Extensions == nil {
@@ -73,8 +73,11 @@ func FromHeader(h nats.Header) (Event, error) {
 	return e, nil
 }
 
-// standard lists the attribute names an extension must not reuse.
-var standard = map[string]bool{
-	"id": true, "source": true, "specversion": true, "type": true, "time": true,
-	"subject": true, "datacontenttype": true, "dataschema": true, "data": true,
+// isStandard reports whether name is an attribute name an extension must not reuse.
+func isStandard(name string) bool {
+	switch name {
+	case "id", "source", "specversion", "type", "time", "subject", "datacontenttype", "dataschema", "data":
+		return true
+	}
+	return false
 }

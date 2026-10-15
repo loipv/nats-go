@@ -148,6 +148,14 @@ func TestInvalidExtensionAndEmptyType(t *testing.T) {
 	if err := ev.Publish(context.Background(), "t", 1, cloudevents.WithExtension("Bad-Name", "v")); err == nil {
 		t.Fatal("bad extension")
 	}
+	for _, name := range []string{"", "abcdefghij0123456789x"} {
+		if err := ev.Publish(context.Background(), "t", 1, cloudevents.WithExtension(name, "v")); err == nil {
+			t.Fatal("bad extension length", name)
+		}
+	}
+	if err := ev.Publish(context.Background(), "t", 1, cloudevents.WithExtension("abcdefghij0123456789", "v")); err != nil {
+		t.Fatal("20-char extension", err)
+	}
 	if err := ev.Publish(context.Background(), "t", 1, cloudevents.WithExtension("source", "v")); err == nil {
 		t.Fatal("reserved name")
 	}

@@ -4,15 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/loipv/nats-go/nats"
 )
-
-var extName = regexp.MustCompile(`^[a-z0-9]{1,20}$`)
 
 // Emitter publishes CloudEvents through an App.
 type Emitter struct {
@@ -158,12 +155,25 @@ func (e *Emitter) header(eventType string, data any, o publishOptions) (nats.Hea
 		h["ce-dataschema"] = []string{o.dataSchema}
 	}
 	for _, x := range o.extensions {
-		if !extName.MatchString(x[0]) || standard[x[0]] {
+		if !validExtName(x[0]) || isStandard(x[0]) {
 			return nil, "", fmt.Errorf("nats: cloudevents: invalid extension name %q", x[0])
 		}
 		h[prefix+x[0]] = []string{x[1]}
 	}
 	return h, id, nil
+}
+
+// validExtName reports whether name matches ^[a-z0-9]{1,20}$.
+func validExtName(name string) bool {
+	if len(name) == 0 || len(name) > 20 {
+		return false
+	}
+	for _, c := range []byte(name) {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // newID returns a random UUID v4.
