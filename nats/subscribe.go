@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 
 	natsio "github.com/nats-io/nats.go"
@@ -68,17 +69,15 @@ func (r *coreReg) prepare(ctx context.Context, a *App) error {
 func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 	h := a.chain(r.cfg, r.h)
 	log := a.opts.logger.With("handler", r.subject, "kind", r.kind)
+	rc := r.cfg.retry(r.kind)
+	stopping := make(chan struct{})
 	p := newPool(r.cfg.concurrency, func(ctx context.Context, m *RawMsg) {
 		if r.kind == kindReply && m.Reply == "" {
 			log.Warn("nats: request without reply subject dropped", "subject", m.Subject)
 			return
 		}
-		err := safeCall(ctx, h, m, log)
-		if err == nil {
-			return
-		}
-		log.Error("nats: handler failed", "subject", m.Subject, "error", err)
-		if r.kind == kindReply {
+		// The requester gets the error even when the message went to the DLQ.
+		if err := a.handleLocal(ctx, h, m, rc, stopping, dlqSource{}, log); err != nil && r.kind == kindReply {
 			if err := respondError(a.nc, m.Reply, err); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
 			}
@@ -96,7 +95,7 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 		_ = p.close(context.Background())
 		return nil, fmt.Errorf("nats: subscribe %q: %w", r.subject, err)
 	}
-	return &coreRunner{name: r.subject, kind: r.kind, sub: sub, pool: p}, nil
+	return &coreRunner{name: r.subject, kind: r.kind, sub: sub, pool: p, stopping: stopping}, nil
 }
 
 func respondError(nc *natsio.Conn, reply string, err error) error {
@@ -116,9 +115,14 @@ type coreRunner struct {
 	sub     *natsio.Subscription
 	pool    *pool
 	stopped atomic.Bool
+
+	// stopping is closed when stop begins, cutting retry waits short.
+	stopping chan struct{}
+	stopOnce sync.Once
 }
 
 func (r *coreRunner) stop(ctx context.Context) error {
+	r.stopOnce.Do(func() { close(r.stopping) })
 	r.stopped.Store(true)
 	closed := r.sub.StatusChanged(natsio.SubscriptionClosed)
 	if err := r.sub.Drain(); err == nil {

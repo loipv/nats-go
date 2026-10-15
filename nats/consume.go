@@ -133,13 +133,21 @@ func (r *jsReg) name() string {
 }
 
 func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
-	rn := &jsRunner{name: r.name(), kind: r.kind}
+	rn := &jsRunner{name: r.name(), kind: r.kind, stopping: make(chan struct{})}
 	h := a.chain(r.cfg, r.h)
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
-	manual := r.cfg.manualAck || r.kind == kindOrdered
 	rc := r.cfg.retry(r.kind)
 	rn.pool = newPool(r.cfg.concurrency, func(ctx context.Context, raw *RawMsg) {
-		if manual {
+		if r.kind == kindOrdered {
+			// Retries hold the worker, so the stream waits and stays in order.
+			src := dlqSource{stream: r.stream}
+			if md, err := jsMsgFrom(ctx).Metadata(); err == nil {
+				src.seq, src.msgID = md.Sequence.Stream, true
+			}
+			_ = a.handleLocal(ctx, h, raw, rc, rn.stopping, src, log)
+			return
+		}
+		if r.cfg.manualAck {
 			if err := safeCall(ctx, h, raw, log); err != nil {
 				log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
 			}
@@ -196,6 +204,10 @@ type jsRunner struct {
 	cc   jetstream.ConsumeContext
 	pool *pool
 
+	// stopping is closed when stop begins, cutting retry waits short.
+	stopping chan struct{}
+	stopOnce sync.Once
+
 	mu      sync.Mutex
 	stopped bool
 	lastErr error
@@ -209,6 +221,7 @@ func (r *jsRunner) fail(err error) {
 
 // stop stops fetching; buffered, unacked messages are redelivered by the server.
 func (r *jsRunner) stop(ctx context.Context) error {
+	r.stopOnce.Do(func() { close(r.stopping) })
 	r.mu.Lock()
 	r.stopped = true
 	r.mu.Unlock()
