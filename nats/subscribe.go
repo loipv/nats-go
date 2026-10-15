@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,11 +118,11 @@ func subjectMatches(pattern, subject string) bool {
 
 func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 	h := a.chain(r.cfg, r.h)
-	log := a.opts.logger.With("handler", r.subject, "kind", r.kind)
+	log := a.sink(r.subject, r.kind)
 	rc := r.cfg.retry(r.kind)
 	stopping := make(chan struct{})
 	p := newPool(r.cfg.concurrency, func(ctx context.Context, m *RawMsg) {
-		ctx = withLogger(ctx, log)
+		ctx = withSink(ctx, log)
 		if r.kind == kindReply && m.Reply == "" {
 			log.Warn("nats: request without reply subject dropped", "subject", m.Subject)
 			return
@@ -165,7 +164,7 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 // DLQ, like handleLocal, and encodes the response it stored in the reply
 // slot. resp is nil when the chain succeeded without setting a response (a
 // middleware did not call next). An encode failure is returned, not retried.
-func (a *App) handleRequest(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *slog.Logger) (resp []byte, abandoned bool, err error) {
+func (a *App) handleRequest(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *sink) (resp []byte, abandoned bool, err error) {
 	out := &reply{}
 	abandoned, err = a.handleLocal(context.WithValue(ctx, replyKey{}, out), h, m, rc, stopping, dlqSource{}, log)
 	if abandoned || err != nil || !out.set {
@@ -174,6 +173,7 @@ func (a *App) handleRequest(ctx context.Context, h Handler, m *RawMsg, rc retryC
 	if resp, err = encode(a.opts.codec, out.v); err != nil {
 		err = fmt.Errorf("nats: encode response: %w", err)
 		log.Error("nats: handler failed", "subject", m.Subject, "error", err)
+		log.failed(m, 0, err)
 		return nil, false, err
 	}
 	if resp == nil {

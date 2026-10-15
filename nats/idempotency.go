@@ -75,7 +75,7 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 			// abort releases the claim even if ctx is already cancelled, or the retry sees ErrInProgress.
 			abort := func() {
 				if aerr := store.Abort(context.WithoutCancel(ctx), key); aerr != nil {
-					loggerFrom(ctx).ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
+					sinkFrom(ctx).ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
 				}
 			}
 			defer func() {
@@ -91,7 +91,7 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 				return err
 			}
 			if err := store.Complete(context.WithoutCancel(ctx), key, c.doneTTL); err != nil {
-				loggerFrom(ctx).ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
+				sinkFrom(ctx).ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
 			}
 			return nil
 		}

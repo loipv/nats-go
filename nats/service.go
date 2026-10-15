@@ -224,7 +224,7 @@ type serviceRunner struct {
 func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handler {
 	h := a.chain(e.cfg, e.h)
 	rc := e.cfg.retry(kindEndpoint)
-	log := a.opts.logger.With("handler", name, "kind", kindEndpoint)
+	log := a.sink(name, kindEndpoint)
 	return micro.HandlerFunc(func(req micro.Request) {
 		if req.Reply() == "" {
 			log.Warn("nats: request without reply subject dropped", "subject", req.Subject())
@@ -233,7 +233,7 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 		r.begin()
 		defer r.done()
 		m := &RawMsg{Subject: req.Subject(), Reply: req.Reply(), Header: Header(req.Headers()), Data: req.Data()}
-		resp, abandoned, err := a.handleRequest(withLogger(a.baseCtx, log), h, m, rc, r.stopping, log)
+		resp, abandoned, err := a.handleRequest(withSink(a.baseCtx, log), h, m, rc, r.stopping, log)
 		switch {
 		case abandoned:
 		case err != nil:

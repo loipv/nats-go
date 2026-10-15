@@ -1,9 +1,13 @@
 package nats
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestEventOptionRejectsNil(t *testing.T) {
@@ -55,5 +59,123 @@ func TestEventOptionsAppend(t *testing.T) {
 	}
 	if n := len(a.opts.events.closed); n != 2 {
 		t.Fatalf("len(closed) = %d, want 2", n)
+	}
+}
+
+// collect returns a callback that records its events and a getter for them.
+func collect[E any]() (func(E), func() []E) {
+	var mu sync.Mutex
+	var got []E
+	return func(e E) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, e)
+		}, func() []E {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]E(nil), got...)
+		}
+}
+
+func TestEventConsumeRetryThenDeadLettered(t *testing.T) {
+	s := runServer(t)
+	onRetry, retries := collect[MsgEvent]()
+	onDLQ, dead := collect[MsgEvent]()
+	a := newApp(t, s, WithOnRetry(onRetry), WithOnDeadLettered(onDLQ))
+	setupStream(t, a)
+	setupDLQ(t, a)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error {
+		return errors.New("db down")
+	}), WithMaxAttempts(3), fast, WithDLQ("dlq.orders"))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return len(dead()) == 1 })
+	rs := retries()
+	if len(rs) != 2 {
+		t.Fatalf("retries = %d, want 2", len(rs))
+	}
+	for i, e := range rs {
+		if e.Attempt != i+1 || e.Handler != "ORDERS/billing" || e.Subject != "orders.x" || e.Err == nil || e.Err.Error() != "db down" || e.Msg == nil {
+			t.Fatalf("retry %d = %+v", i, e)
+		}
+	}
+	if d := dead()[0]; d.Attempt != 3 || d.Handler != "ORDERS/billing" || d.Err == nil || d.Msg == nil {
+		t.Fatalf("dead-lettered = %+v", d)
+	}
+}
+
+func TestEventConsumeFailedWithoutDLQ(t *testing.T) {
+	s := runServer(t)
+	onRetry, retries := collect[MsgEvent]()
+	onFailed, failed := collect[MsgEvent]()
+	a := newApp(t, s, WithOnRetry(onRetry), WithOnFailed(onFailed))
+	setupStream(t, a)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error {
+		return Terminal(errors.New("bad"))
+	}))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return len(failed()) == 1 })
+	if e := failed()[0]; e.Attempt != 1 || e.Handler != "ORDERS/billing" || e.Subject != "orders.x" {
+		t.Fatalf("failed = %+v", e)
+	}
+	if n := len(retries()); n != 0 {
+		t.Fatalf("retries = %d, want 0", n)
+	}
+}
+
+func TestEventSubscribeRetryThenFailed(t *testing.T) {
+	s := runServer(t)
+	onRetry, retries := collect[MsgEvent]()
+	onFailed, failed := collect[MsgEvent]()
+	a := newApp(t, s, WithOnRetry(onRetry), WithOnFailed(onFailed))
+	a.Subscribe("s", Typed(func(context.Context, *Msg[[]byte]) error { return errors.New("nope") }), WithMaxAttempts(2), fast)
+	start(t, a)
+	_ = a.Conn().Publish("s", nil)
+	waitFor(t, func() bool { return len(failed()) == 1 })
+	rs := retries()
+	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "s" {
+		t.Fatalf("retries = %+v", rs)
+	}
+	if e := failed()[0]; e.Attempt != 2 || e.Handler != "s" {
+		t.Fatalf("failed = %+v", e)
+	}
+}
+
+func TestEventDeadLetterFailed(t *testing.T) {
+	s := runServer(t)
+	onDLF, dlf := collect[MsgEvent]()
+	a := newApp(t, s, WithOnDeadLetterFailed(onDLF))
+	setupDLQ(t, a)
+	handlerErr := errors.New("nope")
+	a.Subscribe("s", Typed(func(context.Context, *Msg[[]byte]) error { return handlerErr }), WithDLQ("dlq.s"))
+	start(t, a)
+	if err := a.JetStream().DeleteStream(context.Background(), "DLQ"); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Conn().Publish("s", nil)
+	waitFor(t, func() bool { return len(dlf()) == 1 })
+	e := dlf()[0]
+	if !errors.Is(e.Err, handlerErr) || e.Err.Error() == handlerErr.Error() {
+		t.Fatalf("Err = %v, want handler error joined with the DLQ error", e.Err)
+	}
+}
+
+func TestEventManualAckNoMessageEvents(t *testing.T) {
+	s := runServer(t)
+	onAny, got := collect[MsgEvent]()
+	a := newApp(t, s, WithOnRetry(onAny), WithOnFailed(onAny), WithOnDeadLettered(onAny), WithOnDeadLetterFailed(onAny))
+	setupStream(t, a)
+	called := make(chan struct{}, 1)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error {
+		called <- struct{}{}
+		return errors.New("x")
+	}), WithManualAck())
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	recv(t, called)
+	time.Sleep(300 * time.Millisecond)
+	if n := len(got()); n != 0 {
+		t.Fatalf("got %d message events, want none", n)
 	}
 }

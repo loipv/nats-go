@@ -169,10 +169,10 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	rn := &jsRunner{runnerState: newRunnerState(r.name(), r.kind)}
 	rn.ctx, rn.cancel = context.WithCancel(context.Background())
 	h := a.chain(r.cfg, r.h)
-	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
+	log := a.sink(rn.name, r.kind)
 	rc := r.cfg.retry(r.kind)
 	rn.pool = newPool(r.cfg.concurrency, func(ctx context.Context, raw *RawMsg) {
-		ctx = withLogger(ctx, log)
+		ctx = withSink(ctx, log)
 		if r.kind == kindOrdered {
 			// Retries hold the worker, so the stream waits and stays in order.
 			src := dlqSource{stream: r.stream}
@@ -187,7 +187,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			if r.cfg.autoInProgress {
 				defer keepAlive([]jetstream.Msg{jsMsgFrom(ctx)}, r.ackWait/2, log)()
 			}
-			return safeCall(ctx, h, raw, log)
+			return safeCall(ctx, h, raw, log.Logger)
 		}
 		if r.cfg.manualAck {
 			switch err := call(); {

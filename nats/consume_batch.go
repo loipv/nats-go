@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"runtime/debug"
 	"time"
 
@@ -72,7 +71,7 @@ func (r *batchReg[T]) start(_ context.Context, a *App) (runner, error) {
 	// baseCtx, which lives until the Shutdown deadline.
 	ctx, cancel := context.WithCancel(a.baseCtx)
 	rn := &batchRunner{runnerState: newRunnerState(r.name(), r.kind), cancel: cancel, done: make(chan struct{})}
-	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
+	log := a.sink(rn.name, r.kind)
 	go func() {
 		defer close(rn.done)
 		r.loop(ctx, a, rn, log)
@@ -82,7 +81,7 @@ func (r *batchReg[T]) start(_ context.Context, a *App) (runner, error) {
 
 // loop fetches and handles batches one at a time until ctx is cancelled,
 // restarting when the consumer is deleted.
-func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *slog.Logger) {
+func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *sink) {
 	rc := r.cfg.retry(r.kind)
 	reconnect := func(ctx context.Context) error {
 		if err := a.recoverConsumer(ctx, r.stream, r.consumer); err != nil {
@@ -141,8 +140,8 @@ func (r *batchReg[T]) fetch(ctx context.Context) ([]jetstream.Msg, error) {
 
 // handle drops messages past WithMaxAttempts or failing to decode, calls fn on
 // the rest and settles them by its result.
-func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *slog.Logger) {
-	ctx := withLogger(a.baseCtx, log)
+func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *sink) {
+	ctx := withSink(a.baseCtx, log)
 	var ms []*Msg[T]
 	var srcs []dlqSource
 	for _, m := range msgs {
@@ -196,7 +195,7 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 
 // call runs fn with the handler timeout, extending AckWait meanwhile if
 // asked to, and turns a panic into an error that fails the whole batch.
-func (r *batchReg[T]) call(ctx context.Context, ms []*Msg[T], log *slog.Logger) (err error) {
+func (r *batchReg[T]) call(ctx context.Context, ms []*Msg[T], log *sink) (err error) {
 	if r.cfg.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.cfg.timeout)

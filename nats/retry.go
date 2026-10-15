@@ -3,7 +3,6 @@ package nats
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"math/rand/v2"
 	"time"
 
@@ -78,7 +77,7 @@ func (r retryConfig) exceeded(attempt int) bool {
 // by Idempotent is acked. A term carries the first line of err as its
 // reason, which the server reports in the MSG_TERMINATED advisory. Ack failures are only logged: the server
 // redelivers the message after AckWait.
-func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err error, rc retryConfig, src dlqSource, log *slog.Logger) {
+func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err error, rc retryConfig, src dlqSource, log *sink) {
 	attempt := src.deliveries
 	var ackErr error
 	switch {
@@ -89,16 +88,20 @@ func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err err
 		ackErr = m.Ack()
 	case !IsTerminal(err) && !rc.exhausted(attempt):
 		log.Error("nats: handler failed, will retry", "subject", raw.Subject, "attempt", attempt, "error", err)
+		log.retry(raw, attempt, err)
 		ackErr = m.NakWithDelay(rc.backoff(attempt))
 	case rc.dlq == "":
 		log.Error("nats: handler failed, message terminated", "subject", raw.Subject, "attempt", attempt, "error", err)
+		log.failed(raw, attempt, err)
 		ackErr = m.TermWithReason(firstLine(err))
 	default:
 		if perr := a.publishDLQ(ctx, rc.dlq, raw, err, src); perr != nil {
 			log.Error("nats: handler failed, DLQ publish failed, will retry", "subject", raw.Subject, "attempt", attempt, "error", err, "dlq_error", perr)
+			log.deadLetterFailed(raw, attempt, err, perr)
 			ackErr = m.NakWithDelay(rc.backoff(attempt))
 		} else {
 			log.Error("nats: handler failed, message sent to DLQ", "subject", raw.Subject, "attempt", attempt, "error", err, "dlq", rc.dlq)
+			log.deadLettered(raw, attempt, err)
 			ackErr = m.TermWithReason(firstLine(err))
 		}
 	}
@@ -111,13 +114,14 @@ func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err err
 // uses up rc's attempts, waiting rc.backoff between attempts. It returns the
 // last error and the number of attempts made. A wait cut short by stopping
 // abandons the message.
-func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *slog.Logger) (attempts int, abandoned bool, err error) {
+func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *sink) (attempts int, abandoned bool, err error) {
 	for attempt := 1; ; attempt++ {
-		err = safeCall(withAttempt(ctx, attempt), h, m, log)
+		err = safeCall(withAttempt(ctx, attempt), h, m, log.Logger)
 		if err == nil || IsTerminal(err) || rc.exhausted(attempt) {
 			return attempt, false, err
 		}
 		log.Error("nats: handler failed, will retry", "subject", m.Subject, "attempt", attempt, "error", err)
+		log.retry(m, attempt, err)
 		select {
 		case <-time.After(rc.backoff(attempt)):
 		case <-stopping:
@@ -131,7 +135,7 @@ func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConf
 // fails, logs it and publishes it to the DLQ if one is set. A duplicate
 // skipped by Idempotent is neither. It returns the final error and whether
 // the message was abandoned.
-func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *slog.Logger) (abandoned bool, err error) {
+func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *sink) (abandoned bool, err error) {
 	attempts, abandoned, err := a.retryLocal(ctx, h, m, rc, stopping, log)
 	if err == nil || abandoned {
 		return abandoned, err
@@ -142,13 +146,16 @@ func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryCon
 	}
 	if rc.dlq == "" {
 		log.Error("nats: handler failed", "subject", m.Subject, "attempt", attempts, "error", err)
+		log.failed(m, attempts, err)
 		return false, err
 	}
 	src.deliveries = attempts
 	if perr := a.publishDLQ(ctx, rc.dlq, m, err, src); perr != nil {
 		log.Error("nats: handler failed, DLQ publish failed, message dropped", "subject", m.Subject, "attempt", attempts, "error", err, "dlq_error", perr)
+		log.deadLetterFailed(m, attempts, err, perr)
 	} else {
 		log.Error("nats: handler failed, message sent to DLQ", "subject", m.Subject, "attempt", attempts, "error", err, "dlq", rc.dlq)
+		log.deadLettered(m, attempts, err)
 	}
 	return false, err
 }

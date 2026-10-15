@@ -119,7 +119,7 @@ func TestDispose(t *testing.T) {
 		{errMaxAttempts, 4, "term"},
 		{Terminal(errors.New("x")), 1, "term"},
 	}
-	log := slog.New(slog.DiscardHandler)
+	log := &sink{Logger: slog.New(slog.DiscardHandler)}
 	for _, c := range cases {
 		f := &fakeJSMsg{}
 		(&App{}).dispose(context.Background(), f, &RawMsg{}, c.err, rc, dlqSource{deliveries: c.attempt}, log)

@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -55,6 +56,62 @@ func fire[E any](log *slog.Logger, fns []func(E), e E) {
 			fn(e)
 		}()
 	}
+}
+
+// sink is a worker's logger plus the App's event callbacks, bound to one handler.
+// Call sites log first and then call the matching method, which only dispatches.
+type sink struct {
+	*slog.Logger
+	ev      *events // nil: no callbacks (an App{} in unit tests)
+	handler string
+	kind    handlerKind
+}
+
+func (a *App) sink(handler string, kind handlerKind) *sink {
+	return &sink{Logger: a.opts.logger.With("handler", handler, "kind", kind), ev: &a.opts.events, handler: handler, kind: kind}
+}
+
+func (s *sink) msg(m *RawMsg, attempt int, err error) MsgEvent {
+	return MsgEvent{Handler: s.handler, Subject: m.Subject, Attempt: attempt, Msg: m, Err: err}
+}
+
+func (s *sink) retry(m *RawMsg, attempt int, err error) {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.retry, s.msg(m, attempt, err))
+	}
+}
+
+func (s *sink) failed(m *RawMsg, attempt int, err error) {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.failed, s.msg(m, attempt, err))
+	}
+}
+
+func (s *sink) deadLettered(m *RawMsg, attempt int, err error) {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.deadLettered, s.msg(m, attempt, err))
+	}
+}
+
+func (s *sink) deadLetterFailed(m *RawMsg, attempt int, err, dlqErr error) {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.deadLetterFailed, s.msg(m, attempt, errors.Join(err, dlqErr)))
+	}
+}
+
+type sinkKey struct{}
+
+// withSink stores the worker's sink in ctx for middleware to use.
+func withSink(ctx context.Context, s *sink) context.Context {
+	return context.WithValue(ctx, sinkKey{}, s)
+}
+
+// sinkFrom returns the sink stored in ctx, else one logging to slog.Default().
+func sinkFrom(ctx context.Context) *sink {
+	if s, ok := ctx.Value(sinkKey{}).(*sink); ok {
+		return s
+	}
+	return &sink{Logger: slog.Default()}
 }
 
 func addEvent[E any](name string, dst func(*options) *[]func(E), fn func(E)) Option {

@@ -1,7 +1,6 @@
 package nats
 
 import (
-	"log/slog"
 	"sync"
 	"time"
 
@@ -14,7 +13,7 @@ const defaultAckWait = 30 * time.Second
 // keepAlive sends InProgress for every msg each interval until stop is
 // called, resetting the server's AckWait timer while a handler runs. stop
 // waits for the goroutine to exit.
-func keepAlive(msgs []jetstream.Msg, interval time.Duration, log *slog.Logger) (stop func()) {
+func keepAlive(msgs []jetstream.Msg, interval time.Duration, log *sink) (stop func()) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
