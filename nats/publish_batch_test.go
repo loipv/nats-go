@@ -9,6 +9,7 @@ import (
 	"time"
 
 	natsio "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestPublishJSBatchAcksInOrder(t *testing.T) {
@@ -190,5 +191,42 @@ func TestPublishJSBatchDeadlineStopsSending(t *testing.T) {
 	var be *PublishBatchError
 	if !errors.As(err, &be) || len(be.Failed) != len(msgs) || time.Since(begin) > time.Second {
 		t.Fatal(err, time.Since(begin))
+	}
+}
+
+// Unanswered async publishes must time out, or they fill the in-flight limit
+// and every later batch stalls and fails with ErrTooManyStalledMsgs.
+func TestPublishJSBatchUnansweredFuturesTimeOut(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	a.publishAsyncTimeout = 300 * time.Millisecond
+	setupStream(t, a)
+	start(t, a)
+	sink, err := a.Conn().Subscribe("sink.>", func(*natsio.Msg) {}) // receives, never acks
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Unsubscribe()
+	msgs := make([]BatchMsg, 4000)
+	for i := range msgs {
+		msgs[i] = BatchMsg{Subject: "sink.x", Data: i}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = a.PublishJSBatch(ctx, msgs)
+	var be *PublishBatchError
+	if !errors.As(err, &be) {
+		t.Fatal(err)
+	}
+	if !errors.Is(be.Failed[0], jetstream.ErrAsyncPublishTimeout) {
+		t.Error("want ack timeout, got", be.Failed[0])
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := a.PublishJSBatch(ctx, []BatchMsg{{Subject: "orders.x", Data: 1}}); err != nil {
+		if errors.As(err, &be) {
+			t.Fatal(be.Failed)
+		}
+		t.Fatal(err)
 	}
 }

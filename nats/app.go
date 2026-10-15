@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -33,12 +34,15 @@ type App struct {
 	isRunning atomic.Bool
 	// pubOpen outlives isRunning during Shutdown so in-flight handlers can
 	// still publish; it closes once every handler has stopped.
-	pubOpen    atomic.Bool
-	nc         *natsio.Conn
-	js         jetstream.JetStream
-	closed     chan struct{}
-	baseCtx    context.Context
-	cancelBase context.CancelFunc
+	pubOpen atomic.Bool
+	nc      *natsio.Conn
+	js      jetstream.JetStream
+	// publishAsyncTimeout fails an async publish whose ack never arrives so it
+	// does not count against the in-flight limit forever; tests shorten it.
+	publishAsyncTimeout time.Duration
+	closed              chan struct{}
+	baseCtx             context.Context
+	cancelBase          context.CancelFunc
 }
 
 // HandlerStatus describes one registered handler.
@@ -83,7 +87,7 @@ func New(opts ...Option) (*App, error) {
 			return nil, err
 		}
 	}
-	return &App{opts: o}, nil
+	return &App{opts: o, publishAsyncTimeout: 30 * time.Second}, nil
 }
 
 // Conn returns the underlying connection. It is nil before Start.
@@ -160,7 +164,7 @@ func (a *App) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("nats: connect: %w", err)
 	}
-	js, err := jetstream.New(nc)
+	js, err := jetstream.New(nc, jetstream.WithPublishAsyncTimeout(a.publishAsyncTimeout))
 	if err != nil {
 		nc.Close()
 		return fmt.Errorf("nats: jetstream: %w", err)
