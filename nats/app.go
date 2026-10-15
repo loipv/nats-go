@@ -307,7 +307,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 		case <-ctx.Done():
 		}
 		a.mu.Lock()
-		if a.starting {
+		// A retried Start may have begun since done closed; only abort the
+		// one waited on, which can only still be running if ctx ended.
+		if a.starting && a.startDone == done {
 			a.abortStart = true
 			a.mu.Unlock()
 			return fmt.Errorf("nats: shutdown: %w", ctx.Err())
