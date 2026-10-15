@@ -25,17 +25,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	app.Stream(jetstream.StreamConfig{Name: "EVENTS", Subjects: []string{"events.>"}})
+	app.Stream(jetstream.StreamConfig{Name: "ACTIVITY", Subjects: []string{"activity.>"}})
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	// Ordered consumers never ack. DeliverNewPolicy skips history from
 	// earlier runs; use DeliverAllPolicy to replay the whole stream.
-	app.ConsumeOrdered("EVENTS", nats.Typed(func(_ context.Context, m *nats.Msg[Event]) error {
+	app.ConsumeOrdered("ACTIVITY", nats.Typed(func(_ context.Context, m *nats.Msg[Event]) error {
 		defer wg.Done()
 		fmt.Printf("%s: %s\n", m.Subject, m.Data.Name)
 		return nil
-	}), nats.WithFilterSubjects("events.eu.>"), nats.WithDeliverPolicy(jetstream.DeliverNewPolicy))
+	}), nats.WithFilterSubjects("activity.eu.>"), nats.WithDeliverPolicy(jetstream.DeliverNewPolicy))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {
@@ -47,7 +47,7 @@ func main() {
 		}
 	}()
 
-	for i, subject := range []string{"events.eu.signup", "events.us.signup", "events.eu.login"} {
+	for i, subject := range []string{"activity.eu.signup", "activity.us.signup", "activity.eu.login"} {
 		if _, err := app.PublishJS(ctx, subject, Event{Name: fmt.Sprintf("event-%d", i+1)}); err != nil {
 			log.Fatal(err)
 		}

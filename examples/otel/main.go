@@ -30,7 +30,7 @@ type Order struct {
 func main() {
 	ctx := context.Background()
 
-	exp, err := stdouttrace.New()
+	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
 		log.Fatal(err)
 	}

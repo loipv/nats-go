@@ -16,7 +16,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/loipv/nats-go/nats"
@@ -35,6 +34,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// The handlers report here; main waits on them one step at a time.
+	charged := make(chan string, 1)
+	deadLettered := make(chan string, 2)
 
 	// The DLQ is an ordinary stream that you declare: Start fails if no
 	// stream captures the DLQ subject.
@@ -48,6 +50,7 @@ func main() {
 		fmt.Printf("charger: %s attempt %d\n", m.Data.ID, m.Attempt())
 		if m.Data.FailUntil > 0 && m.Attempt() >= m.Data.FailUntil {
 			fmt.Printf("charger: %s charged\n", m.Data.ID)
+			charged <- m.Data.ID
 			return nil
 		}
 		return errors.New("card gateway unavailable")
@@ -69,9 +72,6 @@ func main() {
 	)
 
 	// Read the DLQ: only messages dead-lettered during this run.
-	var mu sync.Mutex
-	var dead []string
-	deadLettered := make(chan struct{}, 2)
 	app.ConsumeOrdered("DLQ", nats.Typed(func(_ context.Context, m *nats.Msg[Payment]) error {
 		var b strings.Builder
 		fmt.Fprintf(&b, "dlq: %s\n", m.Data.ID)
@@ -85,10 +85,7 @@ func main() {
 		for _, k := range keys {
 			fmt.Fprintf(&b, "  %s: %s\n", k, m.Header.Get(k))
 		}
-		mu.Lock()
-		dead = append(dead, b.String())
-		mu.Unlock()
-		deadLettered <- struct{}{}
+		deadLettered <- b.String()
 		return nil
 	}), nats.WithDeliverPolicy(jetstream.DeliverNewPolicy))
 
@@ -106,27 +103,30 @@ func main() {
 	flaky := Payment{ID: fmt.Sprintf("flaky-%d", run), Amount: 10, FailUntil: 2}
 	broken := Payment{ID: fmt.Sprintf("broken-%d", run), Amount: 20}
 	mail := Payment{ID: fmt.Sprintf("mail-%d", run), Amount: 30}
+	// One scenario at a time, so the output reads in order.
+	wait := func(ch <-chan string) string {
+		select {
+		case v := <-ch:
+			return v
+		case <-time.After(20 * time.Second):
+			log.Fatal("timed out")
+			return ""
+		}
+	}
 	for _, p := range []Payment{flaky, broken} {
 		if _, err := app.PublishJS(ctx, "payments.charge", p, nats.WithMsgID(p.ID)); err != nil {
 			log.Fatal(err)
+		}
+		if p.FailUntil > 0 {
+			wait(charged)
+		} else {
+			fmt.Print(wait(deadLettered))
 		}
 	}
 	if err := app.Publish(ctx, "notify.send", mail); err != nil {
 		log.Fatal(err)
 	}
-
-	for range 2 {
-		select {
-		case <-deadLettered:
-		case <-time.After(20 * time.Second):
-			log.Fatal("timed out waiting for the DLQ")
-		}
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	for _, d := range dead {
-		fmt.Print(d)
-	}
+	fmt.Print(wait(deadLettered))
 }
 
 func natsURL() string {
