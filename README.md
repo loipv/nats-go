@@ -156,7 +156,7 @@ app.ConsumeBatch("ORDERS", "loader", nats.TypedBatch(func(ctx context.Context, m
 }), nats.WithBatchSize(100), nats.WithBatchWait(time.Second))
 ```
 
-Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it. With `nats.WithManualAck()` the handler settles each message itself (`m.Ack()` and friends) and a returned error is only logged; messages that fail to decode, or that were delivered more than `WithMaxAttempts` times, are still settled by the library.
+Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it. With `nats.WithManualAck()` the handler settles each message itself (`m.Ack()` and friends) and a returned error is only logged; messages that fail to decode are still settled by the library.
 
 ### Supervisor
 
@@ -185,7 +185,7 @@ inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMe
 
 - An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.
-- On shutdown, requests already delivered are drained and answered, and their handlers can still publish. micro may deliver a few more requests while its subscriptions drain; those are answered too, but publishing through the `App` fails for them, because it closes once the handlers have stopped.
+- On shutdown, every request delivered to an endpoint is still answered. The one being handled when `Shutdown` begins can publish through the `App`; requests queued behind it, or delivered while micro drains its subscriptions, cannot, because publishing closes once no request is in flight.
 - A middleware that does not call `next` makes the endpoint send an empty response.
 
 ### Batch publishing

@@ -34,7 +34,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// The handlers report here; main waits on them one step at a time.
+	// The handlers report here, only for this run's payments (the durable
+	// consumer may also redeliver ones left by an interrupted earlier run);
+	// main waits on them one step at a time.
+	run := time.Now().UnixNano()
+	mine := func(id string) bool { return strings.HasSuffix(id, fmt.Sprintf("-%d", run)) }
 	charged := make(chan string, 1)
 	deadLettered := make(chan string, 2)
 
@@ -50,7 +54,9 @@ func main() {
 		fmt.Printf("charger: %s attempt %d\n", m.Data.ID, m.Attempt())
 		if m.Data.FailUntil > 0 && m.Attempt() >= m.Data.FailUntil {
 			fmt.Printf("charger: %s charged\n", m.Data.ID)
-			charged <- m.Data.ID
+			if mine(m.Data.ID) {
+				charged <- m.Data.ID
+			}
 			return nil
 		}
 		return errors.New("card gateway unavailable")
@@ -85,7 +91,9 @@ func main() {
 		for _, k := range keys {
 			fmt.Fprintf(&b, "  %s: %s\n", k, m.Header.Get(k))
 		}
-		deadLettered <- b.String()
+		if mine(m.Data.ID) {
+			deadLettered <- b.String()
+		}
 		return nil
 	}), nats.WithDeliverPolicy(jetstream.DeliverNewPolicy))
 
@@ -99,7 +107,6 @@ func main() {
 		}
 	}()
 
-	run := time.Now().UnixNano()
 	flaky := Payment{ID: fmt.Sprintf("flaky-%d", run), Amount: 10, FailUntil: 2}
 	broken := Payment{ID: fmt.Sprintf("broken-%d", run), Amount: 20}
 	mail := Payment{ID: fmt.Sprintf("mail-%d", run), Amount: 30}

@@ -117,6 +117,8 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *si
 				return
 			}
 			rn.setRestarted()
+		case ctx.Err() != nil:
+			return // the lookup in gone was cut short by stop
 		default:
 			log.Warn("nats: fetch", "error", err)
 			log.asyncErr("", fmt.Errorf("fetch: %w", err))

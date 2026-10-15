@@ -241,6 +241,9 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 				return
 			}
 			if !r.gone(ctx, a, err) {
+				if ctx.Err() != nil {
+					return // the lookup was cut short by stop
+				}
 				log.Warn("nats: consume", "error", err)
 				log.asyncErr("", fmt.Errorf("consume: %w", err))
 				return
