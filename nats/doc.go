@@ -39,10 +39,11 @@
 // first is running waits for it and returns the same error. A Shutdown during
 // Start waits for Start, or cancels it when its context ends first. Run calls
 // Start, waits for its context to be cancelled or for the connection to be
-// closed for good (it then returns an error wrapping nats.go's
-// ErrConnectionClosed after shutting down), and calls Shutdown with the
-// WithShutdownTimeout limit. Programs that only publish can call Start and
-// Shutdown directly.
+// closed for good, and calls Shutdown with the WithShutdownTimeout limit. If
+// that Shutdown fails, Run returns its error; otherwise, when the connection
+// closed for good, Run returns an error wrapping nats.go's
+// ErrConnectionClosed. Programs that only publish can call Start and Shutdown
+// directly.
 //
 // # Handlers
 //

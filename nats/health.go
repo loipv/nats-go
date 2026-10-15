@@ -19,7 +19,8 @@ type Report struct {
 	Handlers   []HandlerStatus `json:"handlers"`
 }
 
-// Health reports the connection and handler state.
+// Health reports the connection and handler state. It does not block while
+// Start is connecting: it answers at once, with Ready false.
 func (a *App) Health() Report {
 	a.mu.Lock()
 	nc, runners := a.nc, slices.Clone(a.runners)

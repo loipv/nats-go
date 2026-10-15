@@ -56,8 +56,9 @@ type App struct {
 
 // HandlerStatus describes one registered handler.
 type HandlerStatus struct {
-	// Name is the subject, "stream/consumer", "stream (ordered)" or
-	// "service.endpoint".
+	// Name is the subject, "stream/consumer", "stream (ordered)", or
+	// for an endpoint the service name, group prefixes and endpoint name joined with "."
+	// (orders.v2.get).
 	Name string `json:"name"`
 	// Kind is subscribe, reply, consume, ordered, batch or endpoint.
 	Kind string `json:"kind"`

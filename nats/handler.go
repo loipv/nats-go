@@ -222,7 +222,8 @@ func WithConcurrency(n int) HandlerOption {
 	return func(c *handlerConfig) { c.concurrency = n; c.used = append(c.used, "WithConcurrency") }
 }
 
-// WithTimeout sets a deadline on the context passed to each handler call.
+// WithTimeout sets a deadline on the context passed to each handler call. 0
+// means no timeout; a negative d is a registration error reported by Start.
 func WithTimeout(d time.Duration) HandlerOption {
 	return func(c *handlerConfig) { c.timeout = d; c.used = append(c.used, "WithTimeout") }
 }
@@ -237,7 +238,9 @@ func WithManualAck() HandlerOption {
 	return func(c *handlerConfig) { c.manualAck = true; c.used = append(c.used, "WithManualAck") }
 }
 
-// WithPullMaxMessages sets how many messages a pull consumer buffers.
+// WithPullMaxMessages sets how many messages a pull consumer buffers. An n
+// below 1 is a registration error, and using it on a push consumer makes Start
+// fail.
 func WithPullMaxMessages(n int) HandlerOption {
 	return func(c *handlerConfig) { c.pullMax = n; c.used = append(c.used, "WithPullMaxMessages") }
 }
@@ -265,7 +268,9 @@ func WithBackoff(b Backoff) HandlerOption {
 }
 
 // WithDLQ publishes messages that exhausted their attempts, or failed
-// terminally, to subject.
+// terminally, to subject. A subject that is not a valid NATS subject or that
+// contains a wildcard token (* or >) is a registration error reported by Start,
+// as is an empty one.
 func WithDLQ(subject string) HandlerOption {
 	return func(c *handlerConfig) { c.dlq = subject; c.used = append(c.used, "WithDLQ") }
 }
