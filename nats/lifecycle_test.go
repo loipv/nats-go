@@ -156,16 +156,13 @@ func TestShutdownDuringStart(t *testing.T) {
 	if err := a.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-started:
-		if err != nil {
-			t.Fatal(err)
-		}
-	default:
-		t.Fatal("Shutdown returned before Start")
+	// A Shutdown that did not wait for Start finds no connection, or one
+	// that is still open.
+	if nc := a.Conn(); nc == nil || !nc.IsClosed() || a.Health().Ready {
+		t.Fatal("Shutdown must wait for Start and shut the started app down")
 	}
-	if a.Health().Ready || !a.Conn().IsClosed() {
-		t.Fatal("app must be shut down")
+	if err := recv(t, started); err != nil {
+		t.Fatal(err)
 	}
 }
 

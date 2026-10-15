@@ -104,6 +104,9 @@ func New(opts ...Option) (*App, error) {
 func (a *App) Conn() *natsio.Conn {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.started && !a.starting {
+		return nil
+	}
 	return a.nc
 }
 
@@ -112,6 +115,9 @@ func (a *App) Conn() *natsio.Conn {
 func (a *App) JetStream() jetstream.JetStream {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.started && !a.starting {
+		return nil
+	}
 	return a.js
 }
 
@@ -195,8 +201,9 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.starting, a.abortStart = false, false
 	close(a.startDone)
+	// a.nc and a.js stay set after a failure: publishers read them without
+	// the lock once past the pubOpen check. Conn and JetStream hide them.
 	if err != nil {
-		a.nc, a.js, a.closed = nil, nil, nil
 		return err
 	}
 	a.runners, a.started = runners, true
