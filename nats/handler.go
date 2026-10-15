@@ -321,6 +321,11 @@ func withAttempt(ctx context.Context, n int) context.Context {
 	return context.WithValue(ctx, attemptKey{}, n)
 }
 
+// Attempt returns the attempt of the message being handled, counting from 1:
+// the retry attempt stored in ctx, else the JetStream delivery count. It is 1
+// outside handlers.
+func Attempt(ctx context.Context) int { return attemptFrom(ctx) }
+
 // attemptFrom returns the attempt stored in ctx, else the JetStream delivery
 // count, else 1.
 func attemptFrom(ctx context.Context) int {
