@@ -15,6 +15,9 @@ var (
 	ErrNotJetStream = errors.New("nats: not a JetStream message")
 )
 
+// errMaxAttempts is the DLQ cause of a message redelivered past MaxAttempts.
+var errMaxAttempts = errors.New("nats: max attempts exceeded")
+
 type terminalError struct{ err error }
 
 func (e *terminalError) Error() string { return e.err.Error() }

@@ -56,8 +56,8 @@ type registration interface {
 	start(ctx context.Context, a *App) (runner, error)
 }
 
-// preparer is a registration that resolves server-side resources before
-// any registration starts receiving messages.
+// preparer is a registration that resolves or checks server-side resources
+// before any registration starts receiving messages.
 type preparer interface {
 	prepare(ctx context.Context, a *App) error
 }
@@ -178,15 +178,17 @@ func (a *App) Start(ctx context.Context) error {
 	// Start has no side effects.
 	var core, jsRegs []registration
 	for _, r := range a.regs {
-		p, ok := r.(preparer)
-		if !ok {
+		if p, ok := r.(preparer); ok {
+			if err := p.prepare(ctx, a); err != nil {
+				return fail(err)
+			}
+		}
+		switch r.(type) {
+		case *coreReg:
 			core = append(core, r)
-			continue
+		default:
+			jsRegs = append(jsRegs, r)
 		}
-		if err := p.prepare(ctx, a); err != nil {
-			return fail(err)
-		}
-		jsRegs = append(jsRegs, r)
 	}
 
 	// Handlers may publish as soon as they receive messages. Core

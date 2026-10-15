@@ -11,8 +11,10 @@ import (
 
 // Consume registers fn on an existing durable consumer (or one declared with
 // App.Consumer). Pull and push consumers are detected at Start. With
-// automatic ack (the default) a nil error acks, a Terminal error terms and
-// any other error naks the message.
+// automatic ack (the default) a nil error acks; any other error naks the
+// message with a backoff delay until MaxAttempts is used up. A Terminal
+// error, or the last failed attempt, terms the message after publishing it
+// to the DLQ if one is set.
 func Consume[T any](app *App, stream, consumer string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindConsume, opts)
 	if err == nil && (stream == "" || consumer == "") {
@@ -62,15 +64,17 @@ type jsReg struct {
 	cfg      handlerConfig
 	h        Handler
 
-	// Set by prepare: exactly one of pull or push.
+	// Set by prepare: exactly one of pull or push, and info for durable
+	// consumers.
 	pull jetstream.Consumer
 	push jetstream.PushConsumer
+	info *jetstream.ConsumerInfo
 }
 
 // prepare resolves the consumer, detecting pull or push, without consuming.
 func (r *jsReg) prepare(ctx context.Context, a *App) error {
 	wrap := func(err error) error { return fmt.Errorf("nats: consume %s: %w", r.name(), err) }
-	r.pull, r.push = nil, nil
+	r.pull, r.push, r.info = nil, nil, nil
 	if r.kind == kindOrdered {
 		cfg := jetstream.OrderedConsumerConfig{FilterSubjects: r.cfg.filters}
 		if r.cfg.deliver != nil {
@@ -81,7 +85,7 @@ func (r *jsReg) prepare(ctx context.Context, a *App) error {
 			return wrap(err)
 		}
 		r.pull = c
-		return nil
+		return r.check(ctx, a)
 	}
 	c, err := a.js.Consumer(ctx, r.stream, r.consumer)
 	if errors.Is(err, jetstream.ErrNotPullConsumer) {
@@ -89,13 +93,35 @@ func (r *jsReg) prepare(ctx context.Context, a *App) error {
 		if err != nil {
 			return wrap(err)
 		}
-		r.push = pc
+		r.push, r.info = pc, pc.CachedInfo()
+	} else if err != nil {
+		return wrap(err)
+	} else {
+		r.pull, r.info = c, c.CachedInfo()
+	}
+	return r.check(ctx, a)
+}
+
+// check validates the retry settings against the server-side consumer.
+func (r *jsReg) check(ctx context.Context, a *App) error {
+	rc := r.cfg.retry(r.kind)
+	if rc.dlq != "" {
+		if err := a.checkDLQ(ctx, rc.dlq, r.stream); err != nil {
+			return fmt.Errorf("nats: consume %s: %w", r.name(), err)
+		}
+	}
+	if r.kind == kindOrdered || r.cfg.manualAck {
 		return nil
 	}
-	if err != nil {
-		return wrap(err)
+	// The server stops redelivering after MaxDeliver, before the last
+	// attempt could reach the DLQ.
+	maxDeliver := r.info.Config.MaxDeliver
+	if rc.maxAttempts != Unlimited && maxDeliver != -1 && maxDeliver <= rc.maxAttempts {
+		return fmt.Errorf("nats: consume %s: MaxDeliver %d must exceed MaxAttempts %d", r.name(), maxDeliver, rc.maxAttempts)
 	}
-	r.pull = c
+	if rc.maxAttempts == Unlimited && maxDeliver > 0 {
+		a.opts.logger.Warn("nats: consumer MaxDeliver drops messages the handler retries forever", "handler", r.name(), "max_deliver", maxDeliver)
+	}
 	return nil
 }
 
@@ -111,14 +137,26 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	h := a.chain(r.cfg, r.h)
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
 	manual := r.cfg.manualAck || r.kind == kindOrdered
+	rc := r.cfg.retry(r.kind)
 	rn.pool = newPool(r.cfg.concurrency, func(ctx context.Context, raw *RawMsg) {
-		err := safeCall(ctx, h, raw, log)
-		if err != nil {
-			log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
+		if manual {
+			if err := safeCall(ctx, h, raw, log); err != nil {
+				log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
+			}
+			return
 		}
-		if err := settle(jsMsgFrom(ctx), err, manual); err != nil {
-			log.Error("nats: ack failed", "subject", raw.Subject, "error", err)
+		m := jsMsgFrom(ctx)
+		src := dlqSource{stream: r.stream, consumer: r.consumer, deliveries: 1}
+		if md, err := m.Metadata(); err == nil {
+			src.seq, src.deliveries, src.msgID = md.Sequence.Stream, int(md.NumDelivered), true
 		}
+		// A message redelivered past MaxAttempts (say, after AckWait expired
+		// on a slow handler) is given up on without running the handler.
+		err := errMaxAttempts
+		if !rc.exceeded(src.deliveries) {
+			err = safeCall(ctx, h, raw, log)
+		}
+		a.dispose(ctx, m, raw, err, rc, src, log)
 	})
 
 	cb := func(m jetstream.Msg) { rn.pool.dispatch(withJSMsg(a.baseCtx, m), toRaw(m)) }

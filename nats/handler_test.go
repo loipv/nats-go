@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,28 +14,40 @@ import (
 type fakeJSMsg struct {
 	jetstream.Msg
 	called string
+	delay  time.Duration
 }
 
 func (f *fakeJSMsg) Ack() error  { f.called = "ack"; return nil }
-func (f *fakeJSMsg) Nak() error  { f.called = "nak"; return nil }
 func (f *fakeJSMsg) Term() error { f.called = "term"; return nil }
+func (f *fakeJSMsg) NakWithDelay(d time.Duration) error {
+	f.called, f.delay = "nak", d
+	return nil
+}
 
-func TestSettle(t *testing.T) {
+// TestDispose covers the decision table rows without a DLQ; the DLQ rows
+// need a server and are covered in dlq_test.go.
+func TestDispose(t *testing.T) {
+	rc := retryConfig{maxAttempts: 3, backoff: func(n int) time.Duration { return time.Duration(n) * time.Second }}
 	cases := []struct {
-		err    error
-		manual bool
-		want   string
+		err     error
+		attempt int
+		want    string
 	}{
-		{nil, false, "ack"},
-		{errors.New("x"), false, "nak"},
-		{Terminal(errors.New("x")), false, "term"},
-		{errors.New("x"), true, ""},
+		{nil, 1, "ack"},
+		{errors.New("x"), 2, "nak"},
+		{errors.New("x"), 3, "term"},
+		{errMaxAttempts, 4, "term"},
+		{Terminal(errors.New("x")), 1, "term"},
 	}
+	log := slog.New(slog.DiscardHandler)
 	for _, c := range cases {
 		f := &fakeJSMsg{}
-		_ = settle(f, c.err, c.manual)
+		(&App{}).dispose(context.Background(), f, &RawMsg{}, c.err, rc, dlqSource{deliveries: c.attempt}, log)
 		if f.called != c.want {
-			t.Fatalf("%v manual=%v: got %q want %q", c.err, c.manual, f.called, c.want)
+			t.Fatalf("%v attempt %d: got %q want %q", c.err, c.attempt, f.called, c.want)
+		}
+		if f.called == "nak" && f.delay != time.Duration(c.attempt)*time.Second {
+			t.Fatal("nak delay", f.delay)
 		}
 	}
 }

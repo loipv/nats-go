@@ -341,20 +341,6 @@ func toRaw(m jetstream.Msg) *RawMsg {
 	return &RawMsg{Subject: m.Subject(), Reply: m.Reply(), Header: m.Headers(), Data: m.Data()}
 }
 
-// settle acks a JetStream message according to the handler result.
-func settle(m jetstream.Msg, err error, manual bool) error {
-	switch {
-	case manual:
-		return nil
-	case err == nil:
-		return m.Ack()
-	case IsTerminal(err):
-		return m.Term()
-	default:
-		return m.Nak()
-	}
-}
-
 type job struct {
 	ctx context.Context
 	msg *RawMsg

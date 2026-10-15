@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"sync/atomic"
 
 	natsio "github.com/nats-io/nats.go"
@@ -55,6 +54,17 @@ type coreReg struct {
 	h       Handler
 }
 
+// prepare checks the DLQ stream, if any.
+func (r *coreReg) prepare(ctx context.Context, a *App) error {
+	if r.cfg.dlq == "" {
+		return nil
+	}
+	if err := a.checkDLQ(ctx, r.cfg.dlq, ""); err != nil {
+		return fmt.Errorf("nats: %s %q: %w", r.kind, r.subject, err)
+	}
+	return nil
+}
+
 func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 	h := a.chain(r.cfg, r.h)
 	log := a.opts.logger.With("handler", r.subject, "kind", r.kind)
@@ -94,11 +104,8 @@ func respondError(nc *natsio.Conn, reply string, err error) error {
 	if IsTerminal(err) {
 		code = 400
 	}
-	// Only the first line goes on the wire: headers cannot carry newlines, and
-	// multi-line errors (such as Recover's stack trace) must not leak to callers.
-	desc, _, _ := strings.Cut(err.Error(), "\n")
 	m := natsio.NewMsg(reply)
-	m.Header.Set("Nats-Service-Error", desc)
+	m.Header.Set("Nats-Service-Error", firstLine(err))
 	m.Header.Set("Nats-Service-Error-Code", strconv.Itoa(code))
 	return nc.PublishMsg(m)
 }

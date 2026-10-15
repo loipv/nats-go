@@ -1,8 +1,12 @@
 package nats
 
 import (
+	"context"
+	"log/slog"
 	"math/rand/v2"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Backoff returns the delay before the given retry attempt (1-based).
@@ -66,4 +70,33 @@ func (r retryConfig) exhausted(attempt int) bool {
 // exceeded reports whether attempt is past the allowed attempts.
 func (r retryConfig) exceeded(attempt int) bool {
 	return r.maxAttempts != Unlimited && attempt > r.maxAttempts
+}
+
+// dispose acks, naks or terms a consumed message according to the handler
+// result, publishing it to the DLQ when giving up on it. Ack failures are
+// only logged: the server redelivers the message after AckWait.
+func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err error, rc retryConfig, src dlqSource, log *slog.Logger) {
+	attempt := src.deliveries
+	var ackErr error
+	switch {
+	case err == nil:
+		ackErr = m.Ack()
+	case !IsTerminal(err) && !rc.exhausted(attempt):
+		log.Error("nats: handler failed, will retry", "subject", raw.Subject, "attempt", attempt, "error", err)
+		ackErr = m.NakWithDelay(rc.backoff(attempt))
+	case rc.dlq == "":
+		log.Error("nats: handler failed, message terminated", "subject", raw.Subject, "attempt", attempt, "error", err)
+		ackErr = m.Term()
+	default:
+		if perr := a.publishDLQ(ctx, rc.dlq, raw, err, src); perr != nil {
+			log.Error("nats: handler failed, DLQ publish failed, will retry", "subject", raw.Subject, "attempt", attempt, "error", err, "dlq_error", perr)
+			ackErr = m.NakWithDelay(rc.backoff(attempt))
+		} else {
+			log.Error("nats: handler failed, message sent to DLQ", "subject", raw.Subject, "attempt", attempt, "error", err, "dlq", rc.dlq)
+			ackErr = m.Term()
+		}
+	}
+	if ackErr != nil {
+		log.Error("nats: ack failed", "subject", raw.Subject, "error", ackErr)
+	}
 }
