@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -109,6 +110,9 @@ func (r *jsReg) prepare(ctx context.Context, a *App) error {
 		pc, err := a.js.PushConsumer(ctx, r.stream, r.consumer)
 		if err != nil {
 			return wrap(err)
+		}
+		if slices.Contains(r.cfg.used, "WithPullMaxMessages") {
+			return fmt.Errorf("nats: consume %s: WithPullMaxMessages applies to pull consumers only", r.name())
 		}
 		r.push, r.info = pc, pc.CachedInfo()
 	} else if err != nil {

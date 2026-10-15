@@ -152,3 +152,19 @@ func TestConsumeBatchTypedNilBatchError(t *testing.T) {
 		return calls.Load() >= 1 && pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 3
 	})
 }
+
+func TestBatchJoinedNilBatchErrorFails(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	var calls atomic.Int32
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error {
+		if calls.Add(1) == 1 {
+			return errors.Join(errors.New("boom"), (*BatchError)(nil))
+		}
+		return nil
+	}), WithBatchWait(200*time.Millisecond), WithBackoff(func(int) time.Duration { return 10 * time.Millisecond }))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
+}

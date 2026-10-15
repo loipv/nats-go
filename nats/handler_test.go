@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,5 +119,39 @@ func TestPoolConcurrency(t *testing.T) {
 	_ = p.close(context.Background())
 	if peak.Load() != 3 {
 		t.Fatal("peak", peak.Load())
+	}
+}
+
+func TestDLQSubjectValidation(t *testing.T) {
+	for subj, ok := range map[string]bool{"dlq.x": true, "dlq.a*b": true, "dlq.*": false, "dlq.>": false, "dlq..x": false, "dl q": false, ".dlq": false} {
+		_, err := newHandlerConfig(kindSubscribe, []HandlerOption{WithDLQ(subj)})
+		if ok && err != nil {
+			t.Errorf("%q: unexpected error %v", subj, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "WithDLQ")) {
+			t.Errorf("%q: want error naming WithDLQ, got %v", subj, err)
+		}
+	}
+}
+
+func TestOptionValueValidation(t *testing.T) {
+	if _, err := newHandlerConfig(kindConsume, []HandlerOption{WithPullMaxMessages(0)}); err == nil || !strings.Contains(err.Error(), "WithPullMaxMessages") {
+		t.Errorf("WithPullMaxMessages(0): got %v", err)
+	}
+	if _, err := newHandlerConfig(kindSubscribe, []HandlerOption{WithTimeout(-time.Second)}); err == nil || !strings.Contains(err.Error(), "WithTimeout") {
+		t.Errorf("WithTimeout(-1s): got %v", err)
+	}
+	if _, err := newHandlerConfig(kindSubscribe, []HandlerOption{WithTimeout(0)}); err != nil {
+		t.Errorf("WithTimeout(0): %v", err)
+	}
+}
+
+func TestPullMaxMessagesOnPushConsumer(t *testing.T) {
+	a := newApp(t, runServer(t))
+	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
+	a.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "push", DeliverSubject: "push.billing", AckPolicy: jetstream.AckExplicitPolicy})
+	a.Consume("ORDERS", "push", Typed(func(context.Context, *Msg[order]) error { return nil }), WithPullMaxMessages(10))
+	if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "WithPullMaxMessages") {
+		t.Fatal("want Start error naming WithPullMaxMessages, got", err)
 	}
 }

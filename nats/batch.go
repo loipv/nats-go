@@ -163,7 +163,8 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 
 	err := r.call(ctx, ms, log)
 	var be *BatchError
-	if errors.As(err, &be) && be == nil {
+	errors.As(err, &be)
+	if top, ok := err.(*BatchError); ok && top == nil {
 		err = nil // a typed-nil *BatchError lists no failures
 	}
 	if r.cfg.manualAck {

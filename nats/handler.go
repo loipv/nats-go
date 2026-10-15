@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -165,6 +167,15 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 	if slices.Contains(c.used, "WithDLQ") && c.dlq == "" {
 		return c, errors.New("nats: WithDLQ requires a subject")
 	}
+	if c.dlq != "" && !validPublishSubject(c.dlq) {
+		return c, fmt.Errorf("nats: WithDLQ: invalid subject %q (wildcards are not allowed)", c.dlq)
+	}
+	if slices.Contains(c.used, "WithPullMaxMessages") && c.pullMax < 1 {
+		return c, fmt.Errorf("nats: WithPullMaxMessages must be at least 1, got %d", c.pullMax)
+	}
+	if c.timeout < 0 {
+		return c, fmt.Errorf("nats: WithTimeout must not be negative, got %s", c.timeout)
+	}
 	if c.batchSize < 1 {
 		return c, fmt.Errorf("nats: WithBatchSize must be at least 1, got %d", c.batchSize)
 	}
@@ -186,6 +197,17 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 		return c, fmt.Errorf("nats: concurrency must be at least 1, got %d", c.concurrency)
 	}
 	return c, nil
+}
+
+// validPublishSubject reports whether s is a subject that can be published to:
+// no empty token, no wildcard token and no whitespace.
+func validPublishSubject(s string) bool {
+	for _, tok := range strings.Split(s, ".") {
+		if tok == "" || tok == "*" || tok == ">" || strings.ContainsFunc(tok, unicode.IsSpace) {
+			return false
+		}
+	}
+	return true
 }
 
 // WithQueue joins the subscription to a queue group, so each message is
