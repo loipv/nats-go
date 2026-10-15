@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/micro"
 )
 
@@ -176,6 +178,49 @@ func TestServiceShutdownDuringRequest(t *testing.T) { // Review Focus #1
 	_ = a.Shutdown(ctx)
 	if time.Since(begin) > time.Second {
 		t.Fatal("Shutdown overran its deadline", time.Since(begin))
+	}
+}
+
+func TestServiceShutdownDrainsBufferedRequests(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	started := make(chan struct{}, 3)
+	Endpoint(Service(a, micro.Config{Name: "drain", Version: "1.0.0"}), "do", func(_ context.Context, m *Msg[int]) (int, error) {
+		started <- struct{}{}
+		time.Sleep(100 * time.Millisecond)
+		return m.Data, nil
+	}, EndpointSubject("drain.do"))
+	start(t, a)
+	// A separate requester connection, so the app's drain does not drop the replies.
+	nc, err := natsio.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	errs := make(chan error, 3)
+	var wg sync.WaitGroup
+	for i := range 3 {
+		wg.Go(func() {
+			m, err := nc.Request("drain.do", []byte{'0' + byte(i)}, 3*time.Second)
+			if err == nil && m.Header.Get("Nats-Service-Error") != "" {
+				err = errors.New(m.Header.Get("Nats-Service-Error"))
+			}
+			errs <- err
+		})
+	}
+	<-started
+	time.Sleep(20 * time.Millisecond) // let the other requests reach the subscription
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := a.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

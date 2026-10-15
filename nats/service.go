@@ -83,7 +83,9 @@ func (g *GroupRef) endpointParent() (*ServiceRef, []groupSpec)   { return g.svc,
 // group prefixes followed by EndpointSubject, or name if unset. Requests are
 // handled like Reply: the returned value is encoded and sent back, and an
 // error is sent as a micro service error (code 400 for Terminal errors, 500
-// otherwise), counted in the service STATS.
+// otherwise), counted in the service STATS. On Shutdown, requests already
+// delivered to the endpoint are still handled and answered, within the
+// Shutdown deadline.
 //
 // Options allowed: Timeout, With, MaxAttempts, WithBackoff, DLQ,
 // EndpointSubject and EndpointMetadata. MaxAttempts defaults to 1.
@@ -193,10 +195,12 @@ type serviceRunner struct {
 
 	// stopping is closed when stop begins, cutting retry waits short.
 	stopping chan struct{}
-	// mu guards closed, so no inflight.Add follows inflight.Wait.
+
 	mu       sync.Mutex
 	closed   bool
-	inflight sync.WaitGroup
+	inflight int
+	// idle is set while stop waits and closed when inflight drops to 0.
+	idle chan struct{}
 }
 
 // handler runs one request of endpoint e synchronously in the micro
@@ -206,11 +210,8 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 	rc := e.cfg.retry(kindEndpoint)
 	log := a.opts.logger.With("handler", name, "kind", kindEndpoint)
 	return micro.HandlerFunc(func(req micro.Request) {
-		if !r.begin() {
-			log.Warn("nats: request dropped, shutting down", "subject", req.Subject())
-			return
-		}
-		defer r.inflight.Done()
+		r.begin()
+		defer r.done()
 		m := &RawMsg{Subject: req.Subject(), Reply: req.Reply(), Header: Header(req.Headers()), Data: req.Data()}
 		resp, abandoned, err := a.handleRequest(withLogger(a.baseCtx, log), h, m, rc, r.stopping, log)
 		switch {
@@ -231,37 +232,46 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 	})
 }
 
-// begin counts a request in flight, unless stop has begun.
-func (r *serviceRunner) begin() bool {
+// begin and done count requests in flight.
+func (r *serviceRunner) begin() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
-		return false
-	}
-	r.inflight.Add(1)
-	return true
+	r.inflight++
 }
 
-// stop stops the service and waits for in-flight requests or ctx expiry.
-// Requests still pending in the drained subscriptions are dropped.
+func (r *serviceRunner) done() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inflight--
+	if r.inflight == 0 && r.idle != nil {
+		close(r.idle)
+		r.idle = nil
+	}
+}
+
+// stop starts draining the endpoint subscriptions and waits until no request
+// is in flight, or ctx expiry. micro gives no signal when the drain is
+// complete: requests it delivers after that are still handled, and
+// Shutdown's connection drain waits for them.
 func (r *serviceRunner) stop(ctx context.Context) error {
 	r.mu.Lock()
 	if !r.closed {
 		r.closed = true
 		close(r.stopping)
 	}
+	idle := make(chan struct{})
+	if r.inflight == 0 {
+		close(idle)
+	} else {
+		r.idle = idle
+	}
 	r.mu.Unlock()
-	done := make(chan error, 1)
-	go func() {
-		err := r.svc.Stop()
-		r.inflight.Wait()
-		done <- err
-	}()
+	// Stop does not block: it only starts draining.
+	if err := r.svc.Stop(); err != nil {
+		return fmt.Errorf("nats: service %q: stop: %w", r.name, err)
+	}
 	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("nats: service %q: stop: %w", r.name, err)
-		}
+	case <-idle:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
