@@ -16,6 +16,7 @@ import (
 type runnerState struct {
 	name string
 	kind handlerKind
+	sink *sink
 
 	mu       sync.Mutex
 	state    string
@@ -23,26 +24,35 @@ type runnerState struct {
 	lastErr  error
 }
 
-func newRunnerState(name string, kind handlerKind) runnerState {
-	return runnerState{name: name, kind: kind, state: "running"}
+func newRunnerState(s *sink) runnerState {
+	return runnerState{name: s.handler, kind: s.kind, sink: s, state: "running"}
 }
 
-// setRestarting records err as the reason for a restart, unless stopped.
+// setRestarting records err as the reason for a restart, unless stopped. The
+// event fires after the lock is released, so a callback may call App.Health.
 func (s *runnerState) setRestarting(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	changed := s.state == "running"
 	if s.state != "stopped" {
 		s.state, s.lastErr = "restarting", err
+	}
+	s.mu.Unlock()
+	if changed {
+		s.sink.restarting(err)
 	}
 }
 
 // setRestarted marks a successful restart, unless stopped meanwhile.
 func (s *runnerState) setRestarted() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state == "restarting" {
+	changed := s.state == "restarting"
+	if changed {
 		s.state = "running"
 		s.restarts++
+	}
+	s.mu.Unlock()
+	if changed {
+		s.sink.restarted()
 	}
 }
 

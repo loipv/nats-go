@@ -70,8 +70,8 @@ func (r *batchReg[T]) start(_ context.Context, a *App) (runner, error) {
 	// The loop context only stops fetching; handlers get one derived from
 	// baseCtx, which lives until the Shutdown deadline.
 	ctx, cancel := context.WithCancel(a.baseCtx)
-	rn := &batchRunner{runnerState: newRunnerState(r.name(), r.kind), cancel: cancel, done: make(chan struct{})}
-	log := a.sink(rn.name, r.kind)
+	log := a.sink(r.name(), r.kind)
+	rn := &batchRunner{runnerState: newRunnerState(log), cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(rn.done)
 		r.loop(ctx, a, rn, log)

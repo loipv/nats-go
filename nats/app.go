@@ -339,18 +339,24 @@ func (a *App) stopHooks(ctx context.Context, n int) error {
 // began starting, and returns the errors of the hooks it stopped.
 func (a *App) abandon(ctx context.Context, nc *natsio.Conn, runners []runner, hooks int) error {
 	a.cancelBase()
-	_ = stopRunners(ctx, runners)
+	_ = a.stopRunners(ctx, runners)
 	err := a.stopHooks(ctx, hooks)
 	a.pubOpen.Store(false)
 	nc.Close()
 	return err
 }
 
-func stopRunners(ctx context.Context, runners []runner) error {
+// stopRunners stops runners in parallel, firing the stopped event as each
+// one returns.
+func (a *App) stopRunners(ctx context.Context, runners []runner) error {
 	errs := make([]error, len(runners))
 	var wg sync.WaitGroup
 	for i, r := range runners {
-		wg.Go(func() { errs[i] = r.stop(ctx) })
+		wg.Go(func() {
+			errs[i] = r.stop(ctx)
+			st := r.status()
+			fire(a.opts.logger, a.opts.events.stopped, HandlerEvent{Handler: st.Name, Kind: st.Kind, Err: errs[i]})
+		})
 	}
 	wg.Wait()
 	return errors.Join(errs...)
@@ -415,7 +421,7 @@ func (a *App) shutdown(ctx context.Context) error {
 	defer stopCancel()
 	defer a.cancelBase()
 
-	stopErr := stopRunners(ctx, a.runners)
+	stopErr := a.stopRunners(ctx, a.runners)
 	hookErr := a.stopHooks(ctx, len(a.hooks))
 	a.pubOpen.Store(false)
 	if ctx.Err() == nil {

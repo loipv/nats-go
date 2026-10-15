@@ -166,10 +166,10 @@ func (r *jsReg) source(m jetstream.Msg) dlqSource {
 }
 
 func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
-	rn := &jsRunner{runnerState: newRunnerState(r.name(), r.kind)}
+	log := a.sink(r.name(), r.kind)
+	rn := &jsRunner{runnerState: newRunnerState(log)}
 	rn.ctx, rn.cancel = context.WithCancel(context.Background())
 	h := a.chain(r.cfg, r.h)
-	log := a.sink(rn.name, r.kind)
 	rc := r.cfg.retry(r.kind)
 	rn.pool = newPool(r.cfg.concurrency, func(ctx context.Context, raw *RawMsg) {
 		ctx = withSink(ctx, log)

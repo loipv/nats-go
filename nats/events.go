@@ -99,6 +99,22 @@ func (s *sink) deadLetterFailed(m *RawMsg, attempt int, err, dlqErr error) {
 	}
 }
 
+func (s *sink) handlerEvent(err error) HandlerEvent {
+	return HandlerEvent{Handler: s.handler, Kind: string(s.kind), Err: err}
+}
+
+func (s *sink) restarting(err error) {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.restarting, s.handlerEvent(err))
+	}
+}
+
+func (s *sink) restarted() {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.restarted, s.handlerEvent(nil))
+	}
+}
+
 type sinkKey struct{}
 
 // withSink stores the worker's sink in ctx for middleware to use.

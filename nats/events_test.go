@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -177,5 +178,52 @@ func TestEventManualAckNoMessageEvents(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if n := len(got()); n != 0 {
 		t.Fatalf("got %d message events, want none", n)
+	}
+}
+
+func TestEventHandlerRestartingRestarted(t *testing.T) {
+	s := runServer(t)
+	onRestarting, restarting := collect[HandlerEvent]()
+	onRestarted, restarted := collect[HandlerEvent]()
+	var a *App
+	// Health takes the runner state lock: firing under it would deadlock.
+	a = newApp(t, s, restartFast,
+		WithOnHandlerRestarting(func(e HandlerEvent) { _ = a.Health(); onRestarting(e) }),
+		WithOnHandlerRestarted(func(e HandlerEvent) { _ = a.Health(); onRestarted(e) }))
+	setupStream(t, a)
+	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	start(t, a)
+	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
+	waitFor(t, func() bool { return len(restarted()) == 1 })
+	rs := restarting()
+	if len(rs) != 1 || rs[0].Handler != "ORDERS/billing" || rs[0].Kind != "consume" || rs[0].Err == nil {
+		t.Fatalf("restarting = %+v", rs)
+	}
+	if e := restarted()[0]; e.Handler != "ORDERS/billing" || e.Kind != "consume" || e.Err != nil {
+		t.Fatalf("restarted = %+v", e)
+	}
+}
+
+func TestEventHandlerStopped(t *testing.T) {
+	s := runServer(t)
+	onStopped, stopped := collect[HandlerEvent]()
+	a := newApp(t, s, WithOnHandlerStopped(onStopped))
+	setupStream(t, a)
+	a.Subscribe("s", Typed(nopOrder))
+	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	start(t, a)
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range stopped() {
+		if e.Err != nil {
+			t.Fatalf("stopped = %+v", e)
+		}
+		names = append(names, e.Handler)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"ORDERS/billing", "s"}) {
+		t.Fatalf("stopped = %v", names)
 	}
 }
