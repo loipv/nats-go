@@ -22,7 +22,7 @@
 //
 // Extra headers go through WithHeader; the ce-* and Content-Type headers set
 // by the emitter win on a collision. WithPubOptions is for core options that
-// are not headers, such as nats.ExpectStream: nats.WithHeader passed there
+// are not headers, such as nats.WithExpectStream: nats.WithHeader passed there
 // would replace the CloudEvents headers.
 //
 // Structured and batched modes are not supported. For JetStream durable

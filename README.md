@@ -82,7 +82,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [request-reply](examples/request-reply) | `Reply`, `Request` decoding into a value, `ServiceError` |
 | [jetstream](examples/jetstream) | Declared stream and consumers, `PublishJS` with `WithMsgID`, automatic and manual ack |
 | [ordered](examples/ordered) | `ConsumeOrdered` with subject filters |
-| [middleware](examples/middleware) | `Use`, `With`, `Recover`, `Logger`, `UsePublish` |
+| [middleware](examples/middleware) | `Use`, `WithMiddleware`, `Recover`, `Logger`, `UsePublish` |
 | [service](examples/service) | `Run` with signals, validation, health endpoint, credentials |
 | [retry-dlq](examples/retry-dlq) | `WithMaxAttempts`, `WithBackoff`, `WithDLQ` on a JetStream consumer and a core subscription, `Nats-DLQ-*` headers |
 | [idempotency](examples/idempotency) | `Idempotent` with a `KVStore`, a custom key, one execution for three deliveries |
@@ -178,7 +178,7 @@ inv.Endpoint("get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetSto
 inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMetadata(map[string]string{"owner": "ops"})) // inventory.admin.reset
 ```
 
-`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `Reply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `With`, `WithMaxAttempts`, `WithBackoff` and `WithDLQ` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint.
+`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `Reply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff` and `WithDLQ` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint.
 
 - An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.

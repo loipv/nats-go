@@ -32,7 +32,7 @@ func main() {
 	app.Stream(jetstream.StreamConfig{
 		Name:       "ORDERS",
 		Subjects:   []string{"orders.>"},
-		Duplicates: 2 * time.Minute, // deduplication window for MsgID
+		Duplicates: 2 * time.Minute, // deduplication window for WithMsgID
 	})
 	app.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy})
 	app.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "audit", AckPolicy: jetstream.AckExplicitPolicy})

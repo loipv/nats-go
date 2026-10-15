@@ -84,7 +84,7 @@ func WithExtension(name, value string) PublishOption {
 func WithHeader(h nats.Header) PublishOption { return func(o *publishOptions) { o.header = h } }
 
 // WithPubOptions passes core options that are not headers, such as
-// nats.ExpectStream. Do not pass nats.WithHeader: it replaces the whole
+// nats.WithExpectStream. Do not pass nats.WithHeader: it replaces the whole
 // header, including the CloudEvents attributes. Use WithHeader instead.
 func WithPubOptions(opts ...nats.PubOption) PublishOption {
 	return func(o *publishOptions) { o.pub = append(o.pub, opts...) }

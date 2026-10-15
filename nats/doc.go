@@ -167,7 +167,7 @@
 // # Middleware
 //
 // Middleware wraps handlers on raw messages, before decoding: App.Use for
-// every handler, With for one. Recover and Logger are provided. PublishMiddleware
+// every handler, WithMiddleware for one. Recover and Logger are provided. PublishMiddleware
 // wraps every outgoing message, registered with App.UsePublish.
 //
 // # Integrations
