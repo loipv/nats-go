@@ -17,7 +17,9 @@ import (
 // it is sent: a middleware span ends before the batch is actually published.
 // It returns nats.ErrNotRunning when the app is not running.
 func Publish(ctx context.Context, app *nats.App, msgs []nats.BatchMsg) (*jetstreamext.BatchAck, error) {
-	if app.JetStream() == nil || app.Conn() == nil || app.Conn().IsClosed() {
+	// Read once: a failed Start can make both return nil between two calls.
+	js, nc := app.JetStream(), app.Conn()
+	if js == nil || nc == nil || nc.IsClosed() {
 		return nil, nats.ErrNotRunning
 	}
 	if len(msgs) == 0 {
@@ -49,7 +51,7 @@ func Publish(ctx context.Context, app *nats.App, msgs []nats.BatchMsg) (*jetstre
 			return nil, fmt.Errorf("nats: atomic batch: message %d: a publish middleware did not call next", i)
 		}
 	}
-	ack, err := jetstreamext.PublishMsgBatch(ctx, app.JetStream(), collected)
+	ack, err := jetstreamext.PublishMsgBatch(ctx, js, collected)
 	if err != nil {
 		return nil, fmt.Errorf("nats: atomic batch: %w", err)
 	}

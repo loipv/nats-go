@@ -121,6 +121,19 @@ func TestPublishAtomicEmptyAndNotRunning(t *testing.T) {
 	}
 }
 
+func TestPublishAtomicAfterFailedStart(t *testing.T) {
+	s := testutil.RunServer(t)
+	a := testutil.NewApp(t, s.ClientURL(), atomicStream("ATOMIC", "atomic.>", true), func(a *nats.App) {
+		a.Consume("ATOMIC", "missing", nats.Typed(func(context.Context, *nats.Msg[[]byte]) error { return nil }))
+	})
+	if err := a.Start(context.Background()); err == nil {
+		t.Fatal("want start error")
+	}
+	if _, err := atomicbatch.Publish(context.Background(), a, []nats.BatchMsg{{Subject: "atomic.x", Data: 1}}); !errors.Is(err, nats.ErrNotRunning) {
+		t.Fatal(err)
+	}
+}
+
 func TestPublishAtomicSingleMessageNoHeaders(t *testing.T) {
 	s := testutil.RunServer(t)
 	a := startApp(t, s.ClientURL(), atomicStream("ATOMIC", "atomic.>", true))
