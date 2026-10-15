@@ -90,6 +90,28 @@ func TestSupervisorPullWithoutWaitingRequest(t *testing.T) {
 	waitFor(t, func() bool { h := a.Health(); return h.Status == "ok" && h.Handlers[0].Restarts == 1 })
 }
 
+// A deleted stream takes its consumers with it; the lookup that confirms
+// the deletion then reports the stream, not the consumer, as missing.
+func TestSupervisorRecreatesDeletedStream(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s, restartFast)
+	setupStream(t, a)
+	block := make(chan struct{})
+	got := make(chan string, 8)
+	Consume(a, "ORDERS", "billing", func(_ context.Context, m *Msg[order]) error { got <- m.Data.ID; <-block; return nil }, PullMaxMessages(1))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "2"})
+	recv(t, got)
+	time.Sleep(200 * time.Millisecond) // "2" waits for the busy worker, fulfilling the only pull request
+	_ = a.JetStream().DeleteStream(context.Background(), "ORDERS")
+	close(block)
+	waitFor(t, func() bool { h := a.Health(); return h.Status == "ok" && h.Handlers[0].Restarts == 1 })
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "after"})
+	for recv(t, got) != "after" {
+	}
+}
+
 func TestShutdownDuringRestartBackoff(t *testing.T) { // Review Focus #5
 	s := runServer(t)
 	seed := newApp(t, s)

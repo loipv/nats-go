@@ -72,7 +72,8 @@ func mayBeGone(err error) bool {
 }
 
 // gone reports whether err means the durable consumer was deleted,
-// confirming the ambiguous errors with a lookup.
+// confirming the ambiguous errors with a lookup. A missing stream counts:
+// deleting it deletes its consumers.
 func (r *jsReg) gone(ctx context.Context, a *App, err error) bool {
 	if errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, jetstream.ErrConsumerNotFound) {
 		return true
@@ -81,7 +82,7 @@ func (r *jsReg) gone(ctx context.Context, a *App, err error) bool {
 		return false
 	}
 	_, err = a.js.Consumer(ctx, r.stream, r.consumer)
-	return errors.Is(err, jetstream.ErrConsumerNotFound)
+	return errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound)
 }
 
 // recoverConsumer recreates stream and consumer if they were declared with
