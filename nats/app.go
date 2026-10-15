@@ -19,8 +19,8 @@ type App struct {
 	opts options
 
 	mu          sync.Mutex
+	starting    bool
 	started     bool
-	stopped     bool
 	regErrs     []error
 	regs        []registration
 	streams     []jetstream.StreamConfig
@@ -30,6 +30,10 @@ type App struct {
 	mws         []Middleware
 	pubMws      []PublishMiddleware
 	runners     []runner
+	// shutdownDone is set by the first Shutdown and closed when it returns
+	// shutdownErr.
+	shutdownDone chan struct{}
+	shutdownErr  error
 
 	isRunning atomic.Bool
 	// pubOpen outlives isRunning during Shutdown so in-flight handlers can
@@ -90,11 +94,21 @@ func New(opts ...Option) (*App, error) {
 	return &App{opts: o, publishAsyncTimeout: 30 * time.Second}, nil
 }
 
-// Conn returns the underlying connection. It is nil before Start.
-func (a *App) Conn() *natsio.Conn { return a.nc }
+// Conn returns the underlying connection. It is nil before Start and after
+// a failed Start.
+func (a *App) Conn() *natsio.Conn {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.nc
+}
 
-// JetStream returns the JetStream context. It is nil before Start.
-func (a *App) JetStream() jetstream.JetStream { return a.js }
+// JetStream returns the JetStream context. It is nil before Start and after
+// a failed Start.
+func (a *App) JetStream() jetstream.JetStream {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.js
+}
 
 // Use appends inbound middleware applied to every handler.
 func (a *App) Use(mw ...Middleware) {
@@ -134,54 +148,79 @@ func (a *App) addErr(err error) {
 	a.regErrs = append(a.regErrs, err)
 }
 
-// lateLocked logs and reports registrations made after Start. a.mu must be held.
+// lateLocked logs and reports registrations made after Start began. a.mu
+// must be held.
 func (a *App) lateLocked() bool {
-	if a.started {
+	late := a.started || a.starting
+	if late {
 		a.opts.logger.Error("nats: registration ignored", "error", ErrAlreadyStarted)
 	}
-	return a.started
+	return late
 }
 
 func (a *App) running() bool { return a.isRunning.Load() }
 
 // Start connects, syncs declared streams and consumers, and starts every
 // handler. It does not block. Any failure stops what was started and is
-// returned.
+// returned, and Start may then be called again.
 func (a *App) Start(ctx context.Context) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.started {
+	if a.started || a.starting {
+		a.mu.Unlock()
 		return ErrAlreadyStarted
 	}
 	if err := errors.Join(a.regErrs...); err != nil {
+		a.mu.Unlock()
 		return err
 	}
+	// The lock is not held while connecting so Health answers meanwhile;
+	// starting rejects registrations and a second Start.
+	a.starting = true
+	a.mu.Unlock()
 
+	runners, err := a.connectAndStart(ctx)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.starting = false
+	if err != nil {
+		a.nc, a.js, a.closed = nil, nil, nil
+		return err
+	}
+	a.runners, a.started = runners, true
+	a.isRunning.Store(true)
+	return nil
+}
+
+// connectAndStart does the work of Start without holding a.mu. On failure
+// it closes the connection and stops whatever it started.
+func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	// ponytail: overrides a ClosedHandler passed via WithNATSOptions; chain it if someone needs both.
 	closed := make(chan struct{})
 	natsOpts := append(slices.Clone(a.opts.natsOpts), natsio.ClosedHandler(func(*natsio.Conn) { close(closed) }))
 	nc, err := natsio.Connect(a.opts.url, natsOpts...)
 	if err != nil {
-		return fmt.Errorf("nats: connect: %w", err)
+		return nil, fmt.Errorf("nats: connect: %w", err)
 	}
 	js, err := jetstream.New(nc, jetstream.WithPublishAsyncTimeout(a.publishAsyncTimeout))
 	if err != nil {
 		nc.Close()
-		return fmt.Errorf("nats: jetstream: %w", err)
+		return nil, fmt.Errorf("nats: jetstream: %w", err)
 	}
+	a.mu.Lock()
 	a.nc, a.js, a.closed = nc, js, closed
+	a.mu.Unlock()
 	if err := a.provision(ctx); err != nil {
 		nc.Close()
-		return err
+		return nil, err
 	}
 	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
-	fail := func(err error) error {
+	var runners []runner
+	fail := func(err error) ([]runner, error) {
 		a.cancelBase()
-		_ = a.stopRunners(ctx)
-		a.runners = nil
+		_ = stopRunners(ctx, runners)
 		a.pubOpen.Store(false)
 		nc.Close()
-		return err
+		return nil, err
 	}
 
 	// Resolve every consumer before any handler sees a message, so a failed
@@ -210,18 +249,15 @@ func (a *App) Start(ctx context.Context) error {
 		if err != nil {
 			return fail(err)
 		}
-		a.runners = append(a.runners, rn)
+		runners = append(runners, rn)
 	}
-
-	a.started = true
-	a.isRunning.Store(true)
-	return nil
+	return runners, nil
 }
 
-func (a *App) stopRunners(ctx context.Context) error {
-	errs := make([]error, len(a.runners))
+func stopRunners(ctx context.Context, runners []runner) error {
+	errs := make([]error, len(runners))
 	var wg sync.WaitGroup
-	for i, r := range a.runners {
+	for i, r := range runners {
 		wg.Go(func() { errs[i] = r.stop(ctx) })
 	}
 	wg.Wait()
@@ -230,23 +266,44 @@ func (a *App) stopRunners(ctx context.Context) error {
 
 // Shutdown stops intake on every handler, waits for in-flight handlers and
 // drains the connection, bounded by ctx. It is a no-op before Start or after
-// a previous Shutdown.
+// a completed Shutdown. A Shutdown called while another is in progress waits
+// for it, bounded by its own ctx, and returns the same error.
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
-	if !a.started || a.stopped {
+	if !a.started {
 		a.mu.Unlock()
 		return nil
 	}
-	a.stopped = true
+	if done := a.shutdownDone; done != nil {
+		a.mu.Unlock()
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+		select {
+		case <-done:
+			return a.shutdownErr
+		case <-ctx.Done():
+			return fmt.Errorf("nats: shutdown: %w", ctx.Err())
+		}
+	}
+	a.shutdownDone = make(chan struct{})
 	a.isRunning.Store(false)
 	a.mu.Unlock()
+	a.shutdownErr = a.shutdown(ctx)
+	close(a.shutdownDone)
+	return a.shutdownErr
+}
+
+func (a *App) shutdown(ctx context.Context) error {
 	// Handler contexts live until the deadline, then are cancelled so
 	// ctx-aware handlers return and stopRunners can finish.
 	stopCancel := context.AfterFunc(ctx, a.cancelBase)
 	defer stopCancel()
 	defer a.cancelBase()
 
-	stopErr := a.stopRunners(ctx)
+	stopErr := stopRunners(ctx, a.runners)
 	a.pubOpen.Store(false)
 	if ctx.Err() == nil {
 		if err := a.nc.Drain(); err == nil {
