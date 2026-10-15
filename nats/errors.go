@@ -13,6 +13,10 @@ var (
 	ErrAlreadyStarted = errors.New("nats: app already started")
 	// ErrNotJetStream is returned when calling an ack method on a core NATS message.
 	ErrNotJetStream = errors.New("nats: not a JetStream message")
+	// ErrDuplicate is returned by IdempotencyStore.Begin when the key was already completed.
+	ErrDuplicate = errors.New("nats: duplicate message")
+	// ErrInProgress is returned by IdempotencyStore.Begin when the key is claimed and not yet completed.
+	ErrInProgress = errors.New("nats: message in progress elsewhere")
 )
 
 // errMaxAttempts is the DLQ cause of a message redelivered past MaxAttempts.

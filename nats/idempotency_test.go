@@ -1,0 +1,116 @@
+package nats
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func testStoreContract(t *testing.T, newStore func(t *testing.T) IdempotencyStore) {
+	ctx := context.Background()
+	t.Run("begin complete duplicate", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Begin(ctx, "k1", time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Begin(ctx, "k1", time.Minute); !errors.Is(err, ErrInProgress) {
+			t.Fatal(err)
+		}
+		if err := s.Complete(ctx, "k1", time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Begin(ctx, "k1", time.Minute); !errors.Is(err, ErrDuplicate) {
+			t.Fatal(err)
+		}
+	})
+	t.Run("abort allows retry", func(t *testing.T) {
+		s := newStore(t)
+		_ = s.Begin(ctx, "k2", time.Minute)
+		if err := s.Abort(ctx, "k2"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Begin(ctx, "k2", time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("claim expires", func(t *testing.T) {
+		s := newStore(t)
+		_ = s.Begin(ctx, "k3", time.Second)
+		waitFor(t, func() bool { return s.Begin(ctx, "k3", time.Second) == nil })
+	})
+	t.Run("keys with any characters", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Begin(ctx, "order #1/ü*>", time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestMemoryStoreContract(t *testing.T) {
+	testStoreContract(t, func(*testing.T) IdempotencyStore { return NewMemoryStore() })
+}
+
+func TestIdempotentSkipsDuplicates(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	// Nats-Msg-Id would be deduplicated by the stream itself, so key on another header.
+	a.Use(Idempotent(NewMemoryStore(), IdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
+	var calls atomic.Int32
+	Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error { calls.Add(1); return nil })
+	start(t, a)
+	h := Header{"X-Order-Id": []string{"same"}}
+	_, _ = a.PublishJS(context.Background(), "orders.a", order{ID: "1"}, WithHeader(h))
+	_, _ = a.PublishJS(context.Background(), "orders.b", order{ID: "1"}, WithHeader(h))
+	waitFor(t, func() bool { return pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 2 })
+	if calls.Load() != 1 {
+		t.Fatal(calls.Load())
+	}
+}
+
+func TestIdempotentAbortsOnError(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	a.Use(Idempotent(NewMemoryStore()))
+	var calls atomic.Int32
+	Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error {
+		if calls.Add(1) == 1 {
+			return errors.New("retry")
+		}
+		return nil
+	}, fast)
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("x-1"))
+	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
+}
+
+func TestIdempotentReplyDuplicateGets400(t *testing.T) { // Review Focus #3
+	s := runServer(t)
+	a := newApp(t, s)
+	a.Use(Idempotent(NewMemoryStore()))
+	Reply(a, "once", func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil })
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	h := Header{"Nats-Msg-Id": []string{"r-1"}}
+	if _, err := Request[int](ctx, a, "once", 1, WithHeader(h)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Request[int](ctx, a, "once", 1, WithHeader(h))
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != 400 {
+		t.Fatal(err)
+	}
+}
+
+func TestIdempotentPanicsOnInvalid(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("want panic")
+		}
+	}()
+	Idempotent(nil)
+}
