@@ -64,7 +64,7 @@ func main() {
 	var mu sync.Mutex
 	stock := map[string]int{"apple": 10, "pear": 4}
 
-	svc := nats.Service(app, micro.Config{
+	svc := app.Service(micro.Config{
 		Name:        "inventory",
 		Version:     "1.0.0",
 		Description: "Stock levels",
@@ -72,7 +72,7 @@ func main() {
 
 	// Subject "inventory.get".
 	inv := svc.Group("inventory")
-	nats.Endpoint(inv, "get", func(_ context.Context, m *nats.Msg[GetStock]) (Stock, error) {
+	inv.Endpoint("get", nats.TypedReply(func(_ context.Context, m *nats.Msg[GetStock]) (Stock, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		q, ok := stock[m.Data.SKU]
@@ -81,17 +81,17 @@ func main() {
 			return Stock{}, nats.Terminal(errors.New("unknown sku"))
 		}
 		return Stock{SKU: m.Data.SKU, Quantity: q}, nil
-	}, nats.EndpointMetadata(map[string]string{"owner": "warehouse"}))
+	}), nats.EndpointMetadata(map[string]string{"owner": "warehouse"}))
 
 	// Subject "inventory.admin.reset".
 	admin := inv.Group("admin")
-	nats.Endpoint(admin, "reset", func(_ context.Context, _ *nats.Msg[Reset]) (ResetResult, error) {
+	admin.Endpoint("reset", nats.TypedReply(func(_ context.Context, _ *nats.Msg[Reset]) (ResetResult, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		n := len(stock)
 		clear(stock)
 		return ResetResult{Items: n}, nil
-	})
+	}))
 
 	log.Println("inventory 1.0.0 is up; try: nats micro info inventory")
 	if err := app.Run(ctx); err != nil {

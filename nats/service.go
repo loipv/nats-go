@@ -24,11 +24,6 @@ type GroupRef struct {
 	groups []groupSpec
 }
 
-// EndpointParent is a *ServiceRef or *GroupRef, the parent of an Endpoint.
-type EndpointParent interface {
-	endpointParent() (*ServiceRef, []groupSpec)
-}
-
 type groupSpec struct {
 	prefix string
 	opts   []micro.GroupOpt
@@ -38,28 +33,28 @@ type groupSpec struct {
 // PING, INFO and STATS subjects once the app starts. cfg is passed to
 // micro.AddService as is; Name and Version are required, and Name must be
 // unique within the app.
-func Service(app *App, cfg micro.Config) *ServiceRef {
-	s := &ServiceRef{app: app, reg: &serviceReg{cfg: cfg}}
+func (a *App) Service(cfg micro.Config) *ServiceRef {
+	s := &ServiceRef{app: a, reg: &serviceReg{cfg: cfg}}
 	switch {
 	case cfg.Name == "":
-		app.addErr(errors.New("nats: service: empty name"))
+		a.addErr(errors.New("nats: service: empty name"))
 		return s
 	case cfg.Version == "":
-		app.addErr(fmt.Errorf("nats: service %q: empty version", cfg.Name))
+		a.addErr(fmt.Errorf("nats: service %q: empty version", cfg.Name))
 		return s
 	}
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	if app.lateLocked() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lateLocked() {
 		return s
 	}
-	for _, r := range app.regs {
+	for _, r := range a.regs {
 		if o, ok := r.(*serviceReg); ok && o.cfg.Name == cfg.Name {
-			app.regErrs = append(app.regErrs, fmt.Errorf("nats: service %q: registered twice", cfg.Name))
+			a.regErrs = append(a.regErrs, fmt.Errorf("nats: service %q: registered twice", cfg.Name))
 			return s
 		}
 	}
-	app.regs = append(app.regs, s.reg)
+	a.regs = append(a.regs, s.reg)
 	return s
 }
 
@@ -76,10 +71,7 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 	return &GroupRef{svc: g.svc, groups: append(append([]groupSpec(nil), g.groups...), groupSpec{prefix, opts})}
 }
 
-func (s *ServiceRef) endpointParent() (*ServiceRef, []groupSpec) { return s, nil }
-func (g *GroupRef) endpointParent() (*ServiceRef, []groupSpec)   { return g.svc, g.groups }
-
-// Endpoint registers fn as a micro endpoint of parent. The subject is the
+// Endpoint registers h as a micro endpoint of the service. The subject is the
 // group prefixes followed by EndpointSubject, or name if unset. Requests are
 // handled like Reply: the returned value is encoded and sent back, and an
 // error is sent as a micro service error (code 400 for Terminal errors, 500
@@ -89,17 +81,29 @@ func (g *GroupRef) endpointParent() (*ServiceRef, []groupSpec)   { return g.svc,
 //
 // Options allowed: Timeout, With, MaxAttempts, WithBackoff, DLQ,
 // EndpointSubject and EndpointMetadata. MaxAttempts defaults to 1.
-func Endpoint[Req, Resp any](parent EndpointParent, name string, fn func(context.Context, *Msg[Req]) (Resp, error), opts ...HandlerOption) {
-	s, groups := parent.endpointParent()
+func (s *ServiceRef) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
+	s.addEndpoint(nil, name, h, opts)
+}
+
+// Endpoint registers h as a micro endpoint of the group, with the same rules
+// as ServiceRef.Endpoint.
+func (g *GroupRef) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
+	g.svc.addEndpoint(g.groups, name, h, opts)
+}
+
+func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler, opts []HandlerOption) {
 	cfg, err := newHandlerConfig(kindEndpoint, opts)
 	if err == nil && name == "" {
 		err = errors.New("nats: endpoint: empty name")
+	}
+	if err == nil && h.bind == nil {
+		err = fmt.Errorf("nats: endpoint %q: nil handler", name)
 	}
 	if err != nil {
 		s.app.addErr(fmt.Errorf("nats: service %q: %w", s.reg.cfg.Name, err))
 		return
 	}
-	e := endpointReg{name: name, groups: groups, cfg: cfg, h: replyHandler(s.app.opts.codec, fn)}
+	e := endpointReg{name: name, groups: groups, cfg: cfg, h: h.bind(s.app.opts.codec)}
 	s.app.mu.Lock()
 	defer s.app.mu.Unlock()
 	if s.app.lateLocked() {
