@@ -75,9 +75,10 @@ func (r retryConfig) exceeded(attempt int) bool {
 
 // dispose acks, naks or terms a consumed message according to the handler
 // result, publishing it to the DLQ when giving up on it. A duplicate skipped
-// by Idempotent is acked. A term carries the first line of err as its
-// reason, which the server reports in the MSG_TERMINATED advisory. An ack failure is logged and reported through
-// WithOnAsyncError; the server redelivers the message after AckWait.
+// by Idempotent is acked. A term carries the first line of err as its reason,
+// which the server reports in the MSG_TERMINATED advisory. An ack failure is
+// logged and reported through WithOnAsyncError; the server redelivers the
+// message after AckWait.
 func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err error, rc retryConfig, src dlqSource, log *sink) {
 	attempt := src.deliveries
 	var ackErr error

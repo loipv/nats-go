@@ -66,7 +66,9 @@
 // run synchronously on the goroutine where the event happens and must not
 // block, and may run concurrently, so they must be safe for concurrent use; a
 // panic in one is recovered and logged. Callbacks passed in WithNATSOptions
-// are chained: the user's runs first, then the library's. Shutdown returns
+// are chained: the user's runs first, then the library's. Without a user
+// ErrorHandler, nats.go's async errors are logged through the App's logger.
+// Shutdown returns
 // after OnClosed ran when it drains within its deadline; on a deadline, and
 // after a failed Start, the connection events may arrive after the call
 // returns.

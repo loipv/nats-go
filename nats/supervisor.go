@@ -14,8 +14,6 @@ import (
 // runnerState is the health of a JetStream runner: running, restarting or
 // stopped.
 type runnerState struct {
-	name string
-	kind handlerKind
 	sink *sink
 
 	mu       sync.Mutex
@@ -25,7 +23,7 @@ type runnerState struct {
 }
 
 func newRunnerState(s *sink) runnerState {
-	return runnerState{name: s.handler, kind: s.kind, sink: s, state: "running"}
+	return runnerState{sink: s, state: "running"}
 }
 
 // setRestarting records err as the reason for a restart, unless stopped. The
@@ -65,7 +63,7 @@ func (s *runnerState) setStopped() {
 func (s *runnerState) status() HandlerStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := HandlerStatus{Name: s.name, Kind: string(s.kind), State: s.state, Restarts: s.restarts}
+	st := HandlerStatus{Name: s.sink.handler, Kind: string(s.sink.kind), State: s.state, Restarts: s.restarts}
 	if s.lastErr != nil {
 		st.LastError = s.lastErr.Error()
 	}

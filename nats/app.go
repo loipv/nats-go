@@ -61,9 +61,10 @@ type App struct {
 // publishing is open and before any handler starts, so it can publish but no
 // handler has seen a message yet. If a later hook or a handler fails to start,
 // the hooks that already started are stopped in reverse and Start returns the
-// error, with their OnStop errors joined into it (each wrapped "nats: stop
-// hook i: <err>"). OnStop gets Shutdown's ctx, even when it has already expired, and
-// must honor it. A panic in either function is not recovered.
+// error, with their OnStop errors joined into it (each wrapped
+// "nats: stop hook i: <err>"). OnStop gets Shutdown's ctx, even when it has
+// already expired, and must honor it. A panic in either function is not
+// recovered.
 type Hook struct {
 	OnStart func(ctx context.Context) error
 	OnStop  func(ctx context.Context) error

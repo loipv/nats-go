@@ -36,6 +36,8 @@ func NewKVStore(app *App, bucket string) *KVStore {
 	return s
 }
 
+// provision runs as a start hook, so it relies on App.JetStream() being
+// non-nil during Start.
 func (s *KVStore) provision(ctx context.Context) error {
 	kv, err := s.app.JetStream().CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: s.bucket, History: 1, LimitMarkerTTL: time.Minute})
 	if err != nil {
