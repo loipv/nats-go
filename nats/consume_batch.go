@@ -105,7 +105,7 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *si
 		case err == nil:
 		case r.gone(ctx, a, err):
 			rn.setRestarting(err)
-			if !a.superviseLoop(ctx, ctx.Done(), reconnect, log) {
+			if !a.superviseLoop(ctx, reconnect, log) {
 				return
 			}
 			rn.setRestarted()
@@ -151,7 +151,7 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 			a.dispose(ctx, m, raw, errMaxAttempts, rc, src, log)
 			continue
 		}
-		dm, err := decodeMsg[T](r.codec, withJSMsg(ctx, m), raw)
+		dm, err := decodeMsg[T](withJSMsg(ctx, m), r.codec, raw)
 		if err != nil {
 			a.dispose(ctx, m, raw, err, rc, src, log)
 			continue

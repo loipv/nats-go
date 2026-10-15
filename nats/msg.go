@@ -136,7 +136,7 @@ func (m *Msg[T]) InProgress() error {
 
 // decodeMsg decodes and validates raw into a Msg, taking the JetStream
 // message and attempt from ctx. Decode and validation failures are terminal.
-func decodeMsg[T any](c Codec, ctx context.Context, raw *RawMsg) (*Msg[T], error) {
+func decodeMsg[T any](ctx context.Context, c Codec, raw *RawMsg) (*Msg[T], error) {
 	data, err := decode[T](c, raw.Data)
 	if err != nil {
 		return nil, Terminal(fmt.Errorf("nats: decode: %w", err))

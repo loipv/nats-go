@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -169,7 +170,9 @@ func (c *config) finish(ctx context.Context, span trace.Span, err error, dest, o
 	if err != nil {
 		et := errorType(err)
 		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		// The first line only: a recovered panic carries its stack.
+		desc, _, _ := strings.Cut(err.Error(), "\n")
+		span.SetStatus(codes.Error, desc)
 		span.SetAttributes(attribute.String(keyErrorType, et))
 		attrs = append(attrs, attribute.String(keyErrorType, et))
 	}

@@ -128,7 +128,7 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			return
 		}
 		if r.kind != kindReply {
-			a.handleLocal(ctx, h, m, rc, stopping, dlqSource{}, log)
+			_, _ = a.handleLocal(ctx, h, m, rc, stopping, dlqSource{}, log)
 			return
 		}
 		resp, abandoned, err := a.handleRequest(ctx, h, m, rc, stopping, log)

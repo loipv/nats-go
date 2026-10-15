@@ -113,12 +113,12 @@ func (a *App) recoverConsumer(ctx context.Context, stream, consumer string) erro
 }
 
 // superviseLoop calls reconnect after each restartBackoff delay until it
-// succeeds (true) or stopping is closed (false).
-func (a *App) superviseLoop(ctx context.Context, stopping <-chan struct{}, reconnect func(ctx context.Context) error, log *sink) bool {
+// succeeds (true) or ctx is done (false).
+func (a *App) superviseLoop(ctx context.Context, reconnect func(ctx context.Context) error, log *sink) bool {
 	for k := 1; ; k++ {
 		select {
 		case <-time.After(a.opts.restartBackoff(k)):
-		case <-stopping:
+		case <-ctx.Done():
 			return false
 		}
 		err := reconnect(ctx)

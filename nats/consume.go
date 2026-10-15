@@ -179,7 +179,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			if md, err := jsMsgFrom(ctx).Metadata(); err == nil {
 				src.seq, src.msgID = md.Sequence.Stream, true
 			}
-			a.handleLocal(ctx, h, raw, rc, rn.ctx.Done(), src, log)
+			_, _ = a.handleLocal(ctx, h, raw, rc, rn.ctx.Done(), src, log)
 			return
 		}
 		// call runs the handler, extending AckWait meanwhile if asked to.
@@ -251,7 +251,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 				}
 				return rn.consume(&nr, cb, onErr)
 			}
-			if a.superviseLoop(ctx, ctx.Done(), reconnect, log) {
+			if a.superviseLoop(ctx, reconnect, log) {
 				rn.setRestarted()
 			}
 		})

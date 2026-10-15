@@ -59,7 +59,7 @@ func TypedBatch[T any](fn func(context.Context, []*Msg[T]) error) BatchHandler {
 // typed adapts a typed handler to a raw Handler: decode, validate, call.
 func typed[T any](c Codec, fn func(context.Context, *Msg[T]) error) Handler {
 	return func(ctx context.Context, raw *RawMsg) error {
-		m, err := decodeMsg[T](c, ctx, raw)
+		m, err := decodeMsg[T](ctx, c, raw)
 		if err != nil {
 			return err
 		}
@@ -185,8 +185,9 @@ func newPool(n int, h func(context.Context, *RawMsg)) *pool {
 	return p
 }
 
-// dispatch hands m to a worker. It returns without delivering once close
-// has been called; JetStream redelivers such messages.
+// dispatch hands m to a worker. Once close has been called it usually
+// returns without delivering (JetStream redelivers such messages), but a
+// worker may still take m; close then waits for it like any in-flight one.
 func (p *pool) dispatch(ctx context.Context, m *RawMsg) {
 	select {
 	case p.jobs <- job{ctx: ctx, msg: m}:

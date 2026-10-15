@@ -16,24 +16,25 @@ type Backoff func(attempt int) time.Duration
 // Unlimited as WithMaxAttempts retries a message until it succeeds.
 const Unlimited = -1
 
-// ExponentialBackoff doubles the delay from min on every attempt up to max,
-// with +-20% jitter. It panics if min <= 0 or max < min.
-func ExponentialBackoff(min, max time.Duration) Backoff {
-	if min <= 0 || max < min {
-		panic("nats: ExponentialBackoff requires 0 < min <= max")
+// ExponentialBackoff doubles the delay from minDelay on every attempt up to
+// maxDelay, with +-20% jitter. It panics if minDelay <= 0 or maxDelay <
+// minDelay.
+func ExponentialBackoff(minDelay, maxDelay time.Duration) Backoff {
+	if minDelay <= 0 || maxDelay < minDelay {
+		panic("nats: ExponentialBackoff requires 0 < minDelay <= maxDelay")
 	}
 	return func(attempt int) time.Duration {
-		d := min
-		for i := 1; i < attempt && d < max; i++ {
-			if d > max/2 {
-				d = max
+		d := minDelay
+		for i := 1; i < attempt && d < maxDelay; i++ {
+			if d > maxDelay/2 {
+				d = maxDelay
 			} else {
 				d *= 2
 			}
 		}
 		d = time.Duration(float64(d) * (0.8 + 0.4*rand.Float64()))
-		if d > max {
-			d = max
+		if d > maxDelay {
+			d = maxDelay
 		}
 		return d
 	}

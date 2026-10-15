@@ -107,7 +107,7 @@ func (a *App) Message(subject string, v any, opts ...PubOption) (*RawMsg, error)
 	return m, err
 }
 
-func (a *App) prepare(subject string, v any, opts []PubOption, js bool) (*RawMsg, pubConfig, error) {
+func (a *App) preparePub(subject string, v any, opts []PubOption, js bool) (*RawMsg, pubConfig, error) {
 	if !a.pubOpen.Load() {
 		return nil, pubConfig{}, ErrNotRunning
 	}
@@ -136,7 +136,7 @@ func (a *App) send(ctx context.Context, m *RawMsg, f PublishFunc) error {
 
 // Publish encodes v and sends it on subject without waiting for anyone.
 func (a *App) Publish(ctx context.Context, subject string, v any, opts ...PubOption) error {
-	m, _, err := a.prepare(subject, v, opts, false)
+	m, _, err := a.preparePub(subject, v, opts, false)
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 			return nil, fmt.Errorf("nats: request %q: out must be nil or a non-nil pointer, got %T", subject, out)
 		}
 	}
-	m, _, err := a.prepare(subject, v, opts, false)
+	m, _, err := a.preparePub(subject, v, opts, false)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 
 // PublishJS encodes v, publishes it to JetStream and waits for the stream's ack.
 func (a *App) PublishJS(ctx context.Context, subject string, v any, opts ...PubOption) (*jetstream.PubAck, error) {
-	m, c, err := a.prepare(subject, v, opts, true)
+	m, c, err := a.preparePub(subject, v, opts, true)
 	if err != nil {
 		return nil, err
 	}
