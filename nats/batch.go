@@ -12,13 +12,18 @@ import (
 )
 
 // BatchError reports which messages of a batch failed, by index into the
-// slice passed to the batch handler. The other messages are acked.
+// slice passed to the batch handler. The other messages are acked; a nil
+// *BatchError acks them all.
 type BatchError struct {
 	Failed map[int]error
 }
 
 func (e *BatchError) Error() string {
-	return fmt.Sprintf("nats: %d of batch failed", len(e.Failed))
+	n := 0
+	if e != nil {
+		n = len(e.Failed)
+	}
+	return fmt.Sprintf("nats: %d of batch failed", n)
 }
 
 // ConsumeBatch registers fn on an existing durable pull consumer (or one
@@ -154,14 +159,17 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 	}
 
 	err := r.call(ctx, ms, log)
+	var be *BatchError
+	if errors.As(err, &be) && be == nil {
+		err = nil // a typed-nil *BatchError lists no failures
+	}
 	if r.cfg.manualAck {
 		if err != nil {
 			log.Error("nats: batch handler failed", "size", len(ms), "error", err)
 		}
 		return
 	}
-	var be *BatchError
-	if errors.As(err, &be) {
+	if be != nil {
 		for i := range be.Failed {
 			if i < 0 || i >= len(ms) {
 				log.Warn("nats: batch error index out of range", "index", i, "size", len(ms))

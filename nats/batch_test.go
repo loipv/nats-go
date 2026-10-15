@@ -129,3 +129,26 @@ func TestConsumeBatchShutdownDeadline(t *testing.T) { // Review Focus #4
 		t.Fatal(err, time.Since(begin))
 	}
 }
+func TestConsumeBatchTypedNilBatchError(t *testing.T) {
+	if (*BatchError)(nil).Error() == "" {
+		t.Fatal("empty message")
+	}
+	s := runServer(t)
+	seed := newApp(t, s)
+	setupStream(t, seed)
+	start(t, seed)
+	for i := range 3 {
+		_, _ = seed.PublishJS(context.Background(), "orders.x", order{ID: fmt.Sprint(i)})
+	}
+	a := newApp(t, s)
+	var calls atomic.Int32
+	ConsumeBatch(a, "ORDERS", "billing", func(context.Context, []*Msg[order]) error {
+		calls.Add(1)
+		var be *BatchError
+		return be // a typed nil reports no failures
+	}, BatchWait(200*time.Millisecond), fast)
+	start(t, a)
+	waitFor(t, func() bool {
+		return calls.Load() >= 1 && pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 3
+	})
+}
