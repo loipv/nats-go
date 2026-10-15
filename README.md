@@ -93,6 +93,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [otel](examples/otel) | `natsotel` middleware: producer and consumer spans in one trace, printed to stdout |
 | [cloudevents](examples/cloudevents) | `cloudevents.New`, `Handle` and `Publish` with an extension |
 | [batch-publish](examples/batch-publish) | `PublishJSBatch`, and `PublishJSAtomicBatch` rolling back a batch with a foreign subject |
+| [hooks-events](examples/hooks-events) | `Hook`, `WithOnRetry`, `WithOnDeadLettered`, `WithOnDisconnected` |
 
 ## How handler errors are handled
 
@@ -270,6 +271,39 @@ app.Hook(nats.Hook{
 ```
 
 Hooks start in registration order, after publishing opens and before any handler starts, and stop in reverse order after the handlers have stopped. If a hook or a handler fails to start, the hooks already started are stopped and `Start` returns the error. `OnStop` receives the `Shutdown` context, even when it has expired, and its errors are joined into the `Shutdown` error. Panics in hooks are not recovered.
+
+### Events
+
+The library logs what happens to messages, handlers and the connection. The `WithOn*` options also hand those moments to your code, for metrics or alerts:
+
+| Group | Option | Runs when |
+|---|---|---|
+| Message | `WithOnRetry` | a failed message will be tried again: nakked for redelivery, or about to be retried in process |
+| | `WithOnFailed` | the library gives up on a message without a DLQ: terminated, a core handler out of attempts (every failed core handler with the default single attempt), or a response that cannot be encoded |
+| | `WithOnDeadLettered` | a failed message was published to its DLQ |
+| | `WithOnDeadLetterFailed` | publishing to the DLQ failed; the message is nakked (JetStream) or dropped (core) |
+| Handler | `WithOnHandlerRestarting` | the consumer of a `Consume` or `ConsumeBatch` handler is gone and the supervisor restarts it |
+| | `WithOnHandlerRestarted` | the restarted handler runs again |
+| | `WithOnHandlerStopped` | a handler of any kind stopped, on `Shutdown` or a failed `Start` |
+| Connection | `WithOnDisconnected` | the connection was lost, or closed by `Shutdown` |
+| | `WithOnReconnected` | the connection is back |
+| | `WithOnClosed` | the connection is closed for good, on `Shutdown` or a failed `Start` |
+| Errors | `WithOnAsyncError` | an error the library could only log: a failed ack, nak, term, in-progress or response, a consume, fetch or restart failure, an idempotency claim that could not be completed or aborted, or a nats.go connection error. `Err` is prefixed with the operation (`ack: ...`) and still works with `errors.Is`. A failing `WithAutoInProgress` emits one event per failed tick |
+
+```go
+app, err := nats.New(
+	nats.WithOnRetry(func(e nats.MsgEvent) { retries.Inc() }),
+	nats.WithOnDeadLettered(func(e nats.MsgEvent) { log.Printf("dead letter %s: %v", e.Subject, e.Err) }),
+	nats.WithOnDisconnected(func(err error) { log.Printf("disconnected: %v", err) }),
+)
+```
+
+- Each option may be passed several times: callbacks of the same kind run in the order given. A nil function makes `New` return an error.
+- Callbacks run synchronously on the goroutine where the event happens (a handler worker, the supervisor, a nats.go callback), so they must return quickly and must not block. A panic in a callback is recovered and logged, and the next callback still runs. The library logs first, then runs the callbacks.
+- In-process retries (`Subscribe`, `SubscribeReply`, `ConsumeOrdered`, endpoints) fire `OnRetry` before the backoff wait, so a retry cut short by `Shutdown` has already been reported.
+- Handlers with `WithManualAck` emit no message event, because the handler decides the message's fate. The exception is a `ConsumeBatch` message that fails to decode: the library terms it, so `OnFailed` fires.
+- `OnDisconnected` and `OnClosed` also fire when `Shutdown` closes the connection, and `Shutdown` returns after `OnClosed` ran.
+- Callbacks you pass in `WithNATSOptions` (`DisconnectedErrHandler`, `ReconnectHandler`, `ClosedHandler`, `ErrorHandler`) are chained, not replaced: yours runs first, then the library's. Without your own `ErrorHandler`, nats.go's async errors are logged through the App's logger.
 
 ## Authentication and TLS
 

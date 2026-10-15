@@ -52,6 +52,20 @@
 // ErrConnectionClosed. Programs that only publish can call Start and Shutdown
 // directly.
 //
+// # Events
+//
+// The WithOn* options register callbacks for what the library would otherwise
+// only log: WithOnRetry, WithOnFailed, WithOnDeadLettered and
+// WithOnDeadLetterFailed for messages, WithOnHandlerRestarting,
+// WithOnHandlerRestarted and WithOnHandlerStopped for handlers,
+// WithOnDisconnected, WithOnReconnected and WithOnClosed for the connection,
+// and WithOnAsyncError for failed acks, responses, restarts and connection
+// errors. Each option may be given several times; callbacks of one kind run
+// in the order given, and a nil function makes New return an error. Callbacks
+// run synchronously on the goroutine where the event happens and must not
+// block; a panic in one is recovered and logged. Callbacks passed in
+// WithNATSOptions are chained: the user's runs first, then the library's.
+//
 // # Handlers
 //
 // Handlers receive a *Msg[T] whose Data is decoded with the App's Codec
@@ -89,7 +103,8 @@
 // Retries, the last attempt and the DLQ are covered under Reliability.
 //
 // Using WithManualAck, the handler acks itself through Msg.Ack, Nak, NakWithDelay,
-// Term and InProgress, and the returned error is only logged.
+// Term and InProgress, and the returned error is only logged; it emits no
+// message event (see Events).
 //
 // Option values are checked at registration: WithPullMaxMessages needs n of at
 // least 1 and WithTimeout a duration of 0 (no timeout) or more. Both are

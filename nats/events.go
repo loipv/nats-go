@@ -204,8 +204,14 @@ func addEvent[E any](name string, dst func(*options) *[]func(E), fn func(E)) Opt
 // and attempts are left), or when a core handler is about to retry in process.
 // Err is the handler error.
 //
+// In-process retries (Subscribe, SubscribeReply, ConsumeOrdered and service
+// endpoints) fire OnRetry before the backoff wait, so a retry cut short by
+// Shutdown has already been reported.
+//
 // fn runs synchronously on the goroutine where the event happens and must not
-// block; a panic in fn is recovered and logged.
+// block; a panic in fn is recovered and logged. Each WithOn* option may be
+// given several times: callbacks of one kind run in the order given, and a nil
+// fn makes New return an error.
 func WithOnRetry(fn func(MsgEvent)) Option {
 	return addEvent("WithOnRetry", func(o *options) *[]func(MsgEvent) { return &o.events.retry }, fn)
 }
@@ -215,7 +221,8 @@ func WithOnRetry(fn func(MsgEvent)) Option {
 // handler gives up (this includes every failed core handler with the default
 // single attempt), or a request handler fails to encode its response. Err is
 // the handler or encode error. Messages handled with WithManualAck emit no
-// message event.
+// message event, except that a ConsumeBatch message that fails to decode still
+// emits OnFailed because the library terms it.
 //
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
@@ -314,6 +321,8 @@ func WithOnClosed(fn func()) Option {
 // restart failure, an idempotency claim that could not be completed or
 // aborted, or a connection error reported by nats.go. Err is prefixed with
 // the failed operation, for example "ack: ...", and wraps the original error.
+// A failing InProgress (WithAutoInProgress) emits an event on every failed
+// tick.
 //
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
