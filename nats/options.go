@@ -19,6 +19,7 @@ type options struct {
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
 	restartBackoff  Backoff
+	events          events
 }
 
 func defaultOptions() options {
