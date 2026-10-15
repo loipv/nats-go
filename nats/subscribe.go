@@ -29,7 +29,9 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.
 // A panic in h is sent as "internal error" with code 500; the panic and its
-// stack are only logged.
+// stack are only logged. A middleware that returns nil without calling next
+// sends nothing, so the requester times out (an endpoint sends an empty
+// response instead).
 //
 // A failed request is not retried by default. WithMaxAttempts, WithBackoff and
 // WithDLQ retry it in the worker, and the response is sent after the retries

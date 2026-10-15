@@ -34,15 +34,20 @@ func (e *PublishBatchError) Error() string {
 // ack, then waits for all of them or for ctx. It is not atomic. acks[i] is set
 // for every message known to be stored; if any failed (send, ack, or ctx
 // expired before the ack, in which case the outcome is unknown) the error is a
-// *PublishBatchError. A message that cannot be encoded
-// fails the whole call before anything is sent. Once ctx is done no further
-// message is sent. Beyond about 4000 unacknowledged messages in flight a send
-// stalls for up to 200ms and then fails with jetstream.ErrTooManyStalledMsgs
-// (not stored). Storage order is not strictly guaranteed: jetstream resends a
-// message after a no-responders reply, which can land it behind later ones.
-// An ack that never arrives fails with jetstream.ErrAsyncPublishTimeout after
-// 30s. A publish middleware sees each message when it is handed to the
-// client, not its ack: a natsotel "send" span does not record the ack result.
+// *PublishBatchError. A message that cannot be encoded fails the whole call
+// before anything is sent. Once ctx is done no further message is started.
+//
+// Beyond about 4000 unacknowledged messages in flight a send stalls for up to
+// 200ms and then fails with jetstream.ErrTooManyStalledMsgs (not stored).
+// Storage order is not strictly guaranteed: jetstream resends a message after
+// a no-responders reply, which can land it behind later ones. An ack that
+// never arrives fails with jetstream.ErrAsyncPublishTimeout after 30s.
+//
+// A publish middleware sees each message when it is handed to the client, not
+// its ack: a natsotel "send" span does not record the ack result. A middleware
+// that calls next and then returns an error marks that message failed with
+// its error although it was sent, and one returning a bare context error
+// makes the outcome look unknown.
 func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream.PubAck, error) {
 	if !a.pubOpen.Load() {
 		return nil, ErrNotRunning

@@ -156,7 +156,7 @@ app.ConsumeBatch("ORDERS", "loader", nats.TypedBatch(func(ctx context.Context, m
 }), nats.WithBatchSize(100), nats.WithBatchWait(time.Second))
 ```
 
-Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it.
+Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it. With `nats.WithManualAck()` the handler settles each message itself (`m.Ack()` and friends) and a returned error is only logged; messages that fail to decode, or that were delivered more than `WithMaxAttempts` times, are still settled by the library.
 
 ### Supervisor
 
@@ -185,7 +185,7 @@ inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMe
 
 - An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.
-- On shutdown, requests already delivered are drained and answered. A handler that publishes through the `App` during the drain fails, because publishing is closed.
+- On shutdown, requests already delivered are drained and answered, and their handlers can still publish. micro may deliver a few more requests while its subscriptions drain; those are answered too, but publishing through the `App` fails for them, because it closes once the handlers have stopped.
 - A middleware that does not call `next` makes the endpoint send an empty response.
 
 ### Batch publishing
@@ -201,7 +201,7 @@ if errors.As(err, &be) {
 }
 ```
 
-`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the bare context error means the outcome is unknown: the message may have been stored. Once `ctx` is cancelled or expires no further message is sent, and those entries read `nats: batch message N not sent: ...`. A message that cannot be encoded fails the whole call before anything is sent. Beyond about 4000 unacknowledged messages in flight a send stalls for up to 200ms and then fails with `jetstream.ErrTooManyStalledMsgs` (definitely not stored), so split bigger batches; an ack that never arrives fails with `jetstream.ErrAsyncPublishTimeout` after 30s. Storage order is not strictly guaranteed: jetstream resends a message after a no-responders reply, which can land it behind later ones.
+`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the bare context error means the outcome is unknown: the message may have been stored. Once `ctx` is cancelled or expires no further message is started, and those entries read `nats: batch message N not sent: ...`. A publish middleware that calls `next` and then returns an error marks that message failed with its error, although it was sent; a middleware returning a bare context error looks like an unknown outcome. A message that cannot be encoded fails the whole call before anything is sent. Beyond about 4000 unacknowledged messages in flight a send stalls for up to 200ms and then fails with `jetstream.ErrTooManyStalledMsgs` (definitely not stored), so split bigger batches; an ack that never arrives fails with `jetstream.ErrAsyncPublishTimeout` after 30s. Storage order is not strictly guaranteed: jetstream resends a message after a no-responders reply, which can land it behind later ones.
 
 For all-or-nothing publishing use `PublishJSAtomicBatch`:
 
@@ -257,7 +257,7 @@ CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and
 
 - `Start(ctx)` connects, creates or updates declared streams and consumers (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned, and `Start` can then be called again. Registration mistakes (including `WithPullMaxMessages(n)` with `n < 1`, a negative `WithTimeout` and an invalid `WithDLQ` subject) are returned here too. `Start` does not hold a lock while it connects, so `Health()` answers meanwhile with `ready` false, and `Conn()` and `JetStream()` return nil unless the app is started or starting.
 - `Shutdown(ctx)` stops intake, waits for in-flight handlers and drains the connection within the context deadline. Unacked JetStream messages are redelivered by the server. A second `Shutdown` that starts while the first is running waits for it and returns its error; a `Shutdown` during `Start` waits for `Start`, or cancels it when its `ctx` ends first.
-- `Run(ctx)` is `Start`, wait for `ctx` or for the connection to be closed for good then `Shutdown` bounded by `WithShutdownTimeout` (30s by default). If that `Shutdown` fails, `Run` returns its error; otherwise, when the connection closed for good, `Run` returns an error wrapping nats.go's `ErrConnectionClosed`.
+- `Run(ctx)` is `Start`, wait for `ctx` or for the connection to be closed for good, then `Shutdown` bounded by `WithShutdownTimeout` (30s by default). If that `Shutdown` fails, `Run` returns its error; otherwise, when the connection closed for good, `Run` returns an error wrapping nats.go's `ErrConnectionClosed`.
 - The connection reconnects forever by default (`nats.WithNATSOptions(natsio.MaxReconnects(n))` to change it); while reconnecting, health reports `degraded`.
 - `Health()` and `HealthHandler()` report the connection and every handler; mount the handler on your own HTTP server.
 

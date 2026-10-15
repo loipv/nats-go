@@ -231,10 +231,12 @@
 // goroutine; scale with more instances, which share a queue group.
 // WithMaxAttempts, WithBackoff and Unlimited stall the endpoint while a request
 // is retried, and the whole retry time must fit the requester's timeout. On
-// Shutdown the requests already delivered are drained and answered, but a
-// handler that publishes through the App then fails, because publishing is
-// closed. A middleware that does not call next makes the endpoint send an
-// empty response.
+// Shutdown the requests already delivered are drained and answered, and their
+// handlers can still publish. micro may deliver a few more requests while its
+// subscriptions drain; those are answered too, but publishing through the App
+// fails for them, because it closes once the handlers have stopped. A
+// middleware that does not call next makes the endpoint send an empty
+// response.
 //
 // App.PublishJSBatch publishes many messages to JetStream and waits for all
 // the acks together. It is not atomic: acks[i] is non-nil for every message

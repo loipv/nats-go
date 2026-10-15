@@ -32,7 +32,9 @@ func (e *BatchError) Error() string {
 // more than WithMaxAttempts times, are settled without reaching h. With
 // automatic ack a nil error acks the whole batch, a *BatchError settles
 // only the listed messages as failed (also when found inside errors.Join or a
-// wrapper), and any other error fails every message. Middleware does not apply to batch handlers.
+// wrapper), and any other error fails every message. With WithManualAck the
+// handler settles each message itself and a returned error is only logged.
+// Middleware does not apply to batch handlers.
 func (a *App) ConsumeBatch(stream, consumer string, h BatchHandler, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindBatch, opts)
 	if err == nil && (stream == "" || consumer == "") {
