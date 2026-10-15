@@ -45,7 +45,7 @@ type App struct {
 type HandlerStatus struct {
 	// Name is the subject, "stream/consumer" or "stream (ordered)".
 	Name string `json:"name"`
-	// Kind is subscribe, reply, consume or ordered.
+	// Kind is subscribe, reply, consume, ordered or batch.
 	Kind string `json:"kind"`
 	// State is running or stopped.
 	State     string `json:"state"`

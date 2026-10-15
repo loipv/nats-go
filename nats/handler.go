@@ -258,20 +258,29 @@ func BatchWait(d time.Duration) HandlerOption {
 }
 
 // typed adapts a typed handler to a raw Handler: decode, validate, call.
-// Decode and validation failures are terminal.
 func typed[T any](c Codec, fn func(context.Context, *Msg[T]) error) Handler {
 	return func(ctx context.Context, raw *RawMsg) error {
-		data, err := decode[T](c, raw.Data)
+		m, err := decodeMsg[T](c, ctx, raw)
 		if err != nil {
-			return Terminal(fmt.Errorf("nats: decode: %w", err))
+			return err
 		}
-		if v, ok := any(&data).(interface{ Validate() error }); ok {
-			if err := v.Validate(); err != nil {
-				return Terminal(fmt.Errorf("nats: validate: %w", err))
-			}
-		}
-		return fn(ctx, &Msg[T]{Subject: raw.Subject, Header: raw.Header, Data: data, Raw: raw, js: jsMsgFrom(ctx), attempt: attemptFrom(ctx)})
+		return fn(ctx, m)
 	}
+}
+
+// decodeMsg decodes and validates raw into a Msg, taking the JetStream
+// message and attempt from ctx. Decode and validation failures are terminal.
+func decodeMsg[T any](c Codec, ctx context.Context, raw *RawMsg) (*Msg[T], error) {
+	data, err := decode[T](c, raw.Data)
+	if err != nil {
+		return nil, Terminal(fmt.Errorf("nats: decode: %w", err))
+	}
+	if v, ok := any(&data).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			return nil, Terminal(fmt.Errorf("nats: validate: %w", err))
+		}
+	}
+	return &Msg[T]{Subject: raw.Subject, Header: raw.Header, Data: data, Raw: raw, js: jsMsgFrom(ctx), attempt: attemptFrom(ctx)}, nil
 }
 
 // chain wraps h with handler middleware, then app middleware, then the

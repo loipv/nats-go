@@ -139,6 +139,15 @@ func (r *jsReg) name() string {
 	return r.stream + "/" + r.consumer
 }
 
+// source describes a message of a durable consumer for dispose.
+func (r *jsReg) source(m jetstream.Msg) dlqSource {
+	src := dlqSource{stream: r.stream, consumer: r.consumer, deliveries: 1}
+	if md, err := m.Metadata(); err == nil {
+		src.seq, src.deliveries, src.msgID = md.Sequence.Stream, int(md.NumDelivered), true
+	}
+	return src
+}
+
 func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	rn := &jsRunner{name: r.name(), kind: r.kind, stopping: make(chan struct{})}
 	h := a.chain(r.cfg, r.h)
@@ -169,10 +178,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			return
 		}
 		m := jsMsgFrom(ctx)
-		src := dlqSource{stream: r.stream, consumer: r.consumer, deliveries: 1}
-		if md, err := m.Metadata(); err == nil {
-			src.seq, src.deliveries, src.msgID = md.Sequence.Stream, int(md.NumDelivered), true
-		}
+		src := r.source(m)
 		// A message redelivered past MaxAttempts (say, after AckWait expired
 		// on a slow handler) is given up on without running the handler.
 		err := errMaxAttempts
