@@ -134,7 +134,7 @@ func TestConsumeExceededSkipsHandler(t *testing.T) {
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) >= 1 })
 	time.Sleep(500 * time.Millisecond)
 	if calls.Load() != 1 || len(dlqMsgs(t, a)) != 1 {
-		t.Fatal("redelivery past MaxAttempts must skip handler and DLQ once", calls.Load(), len(dlqMsgs(t, a)))
+		t.Fatal("redelivery past WithMaxAttempts must skip handler and DLQ once", calls.Load(), len(dlqMsgs(t, a)))
 	}
 }
 

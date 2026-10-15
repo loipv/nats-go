@@ -10,13 +10,17 @@ import (
 func TestNilHandlerIsRegistrationError(t *testing.T) {
 	s := runServer(t)
 	var nilFn func(context.Context, *Msg[string]) error
+	var nilReplyFn func(context.Context, *Msg[string]) (string, error)
+	var nilBatchFn func(context.Context, []*Msg[string]) error
 	cases := map[string]func(a *App){
 		"subscribe zero":  func(a *App) { a.Subscribe("x", MsgHandler{}) },
 		"subscribe nilfn": func(a *App) { a.Subscribe("x", Typed(nilFn)) },
 		"reply zero":      func(a *App) { a.Reply("x", ReplyHandler{}) },
+		"reply nilfn":     func(a *App) { a.Reply("x", TypedReply(nilReplyFn)) },
 		"consume zero":    func(a *App) { a.Consume("ORDERS", "billing", MsgHandler{}) },
 		"ordered zero":    func(a *App) { a.ConsumeOrdered("ORDERS", MsgHandler{}) },
 		"batch zero":      func(a *App) { a.ConsumeBatch("ORDERS", "billing", BatchHandler{}) },
+		"batch nilfn":     func(a *App) { a.ConsumeBatch("ORDERS", "billing", TypedBatch(nilBatchFn)) },
 	}
 	for name, register := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -58,37 +62,4 @@ func TestTypedHandlerReused(t *testing.T) {
 		defer mu.Unlock()
 		return seen["reuse.core"] == 1 && seen["orders.reuse"] == 1
 	})
-}
-
-func TestOptionErrorsUseNewNames(t *testing.T) {
-	s := runServer(t)
-	noop := Typed(func(context.Context, *Msg[[]byte]) error { return nil })
-	batch := TypedBatch(func(context.Context, []*Msg[[]byte]) error { return nil })
-	cases := map[string]struct {
-		register func(a *App)
-		want     string
-	}{
-		"handler kind": {func(a *App) { a.Subscribe("x", noop, WithManualAck()) }, "WithManualAck"},
-		"max attempts": {func(a *App) { a.Subscribe("x", noop, WithMaxAttempts(0)) }, "WithMaxAttempts"},
-		"dlq empty":    {func(a *App) { a.Subscribe("x", noop, WithDLQ("")) }, "WithDLQ"},
-		"batch size": {func(a *App) {
-			setupStream(t, a)
-			a.ConsumeBatch("ORDERS", "billing", batch, WithBatchSize(0))
-		}, "WithBatchSize"},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			a := newApp(t, s)
-			c.register(a)
-			if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("Start err = %v, want %q", err, c.want)
-			}
-			_ = a.Shutdown(context.Background())
-		})
-	}
-	a := newApp(t, s)
-	start(t, a)
-	if err := a.Publish(context.Background(), "x", 1, WithMsgID("1")); err == nil || !strings.Contains(err.Error(), "WithMsgID") {
-		t.Fatalf("Publish err = %v, want WithMsgID", err)
-	}
 }

@@ -67,7 +67,7 @@ func assertShutdownBounded(t *testing.T, a *App) {
 // I1: ordered consumers must not accept Concurrency > 1.
 func TestOrderedRejectsConcurrency(t *testing.T) {
 	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{WithConcurrency(4)}); err == nil {
-		t.Fatal("Concurrency(4) must be rejected for ordered")
+		t.Fatal("WithConcurrency(4) must be rejected for ordered")
 	}
 	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{WithConcurrency(1)}); err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestDefaultReconnectsForever(t *testing.T) {
 	}
 }
 
-// M1 (re-graded Important): a publish middleware that short-circuits must not panic Request.
+// A publish middleware that short-circuits must not panic Request.
 func TestRequestShortCircuitMiddlewareDoesNotPanic(t *testing.T) {
 	a := newApp(t, runServer(t))
 	a.UsePublish(func(PublishFunc) PublishFunc {

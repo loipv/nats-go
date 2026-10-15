@@ -78,10 +78,12 @@ func (a *App) build(subject string, v any, opts []PubOption) (*RawMsg, pubConfig
 	return &RawMsg{Subject: subject, Data: data, Header: h}, c, nil
 }
 
-// Message builds the message Publish or PublishJS would send, without sending
-// it: v encoded by the codec, the headers from opts, and the JetStream options
-// (WithMsgID, WithExpectStream, WithExpectLastSeq, WithExpectLastSubjectSeq) as headers. It
-// needs no connection and is meant for integrations such as atomic batches.
+// Message builds the message PublishJS would send, without sending it: v
+// encoded by the codec, the headers from opts, and the JetStream options
+// (WithMsgID, WithExpectStream, WithExpectLastSeq, WithExpectLastSubjectSeq)
+// as headers. Publish rejects those JetStream options, so a message built with
+// them is only for PublishJS or a batch. It needs no connection and is meant
+// for integrations such as atomic batches.
 func (a *App) Message(subject string, v any, opts ...PubOption) (*RawMsg, error) {
 	m, _, err := a.build(subject, v, opts)
 	return m, err

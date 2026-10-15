@@ -31,7 +31,7 @@ func TestPublishJSExpectHeaderEnforced(t *testing.T) {
 	setupStream(t, a)
 	start(t, a)
 	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithExpectLastSeq(42)); err == nil {
-		t.Fatal("wrong ExpectLastSeq must be rejected by the server")
+		t.Fatal("wrong WithExpectLastSeq must be rejected by the server")
 	}
 	ack1, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("d"))
 	ack2, _ := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("d"))

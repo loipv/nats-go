@@ -99,9 +99,9 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | `nil` | `Ack` | - | - | encoded response |
 | any other error | `NakWithDelay` by the backoff, until `WithMaxAttempts` is used up; then `Term` | yes, unless `WithMaxAttempts` is 1 | after the last attempt, if `WithDLQ(subject)` is set | `Nats-Service-Error`, code 500 |
 | `nats.Terminal(err)`, decode or validation failure | `Term` (never redelivered) | no | immediately, if `WithDLQ(subject)` is set | `Nats-Service-Error`, code 400 |
-| panic | handled as any other error | as above | as above | as above |
+| panic | handled as any other error | as above | as above | `Nats-Service-Error: internal error`, code 500; the panic and stack are only logged |
 
-Retry and DLQ apply when `WithDLQ(subject)` is set; without it a message that ran out of attempts is logged and termed. `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `Reply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
+Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `Reply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
 
 With `nats.WithManualAck()` the handler acks itself via `m.Ack()`, `m.Nak()`, `m.NakWithDelay(d)`, `m.Term()` or `m.InProgress()`.
 
@@ -123,7 +123,7 @@ app.Consume("PAYMENTS", "charger", nats.Typed(charge),
 
 - With `Consume` and `ConsumeBatch` the server redelivers: a failed message is naked with a delay, and `m.Attempt()` is the delivery count. `MaxDeliver` on the consumer must be `-1` or greater than `WithMaxAttempts`, or `Start` fails.
 - With `Subscribe`, `Reply` and `ConsumeOrdered` there is no redelivery, so `WithMaxAttempts(n)` makes the library retry in the worker, waiting for the backoff between attempts. `Unlimited` can stall the subscription while failures last, a `Reply` must finish its retries within the requester's timeout, and `ConsumeOrdered` stalls the whole stream while it retries (which keeps the order).
-- `WithDLQ(subject)` publishes the original payload and headers plus `Nats-DLQ-Error`, `Nats-DLQ-Subject`, `Nats-DLQ-Deliveries` and, for JetStream consumers, `Nats-DLQ-Stream`, `Nats-DLQ-Consumer`, `Nats-DLQ-Sequence` and `Nats-DLQ-Msg-Id`. `Start` fails if no stream captures the subject, if it is the handler's source stream, or if a `Subscribe` or `Reply` handler's own subject matches it.
+- `WithDLQ(subject)` publishes the original payload and headers plus `Nats-DLQ-Error`, `Nats-DLQ-Subject`, `Nats-DLQ-Deliveries` and, for JetStream consumers, `Nats-DLQ-Stream`, `Nats-DLQ-Consumer`, `Nats-DLQ-Sequence` and `Nats-DLQ-Msg-Id`. The subject must be a valid subject without a `*` or `>` token. `Start` fails if no stream captures the subject, if it is the handler's source stream, or if a `Subscribe` or `Reply` handler's own subject matches it.
 - `WithMaxAttempts`, `WithBackoff` and `WithDLQ` cannot be combined with `WithManualAck`.
 - `WithAutoInProgress()` extends the ack wait of a `Consume` or `ConsumeBatch` message while the handler runs; use it with `WithTimeout(d)`.
 
@@ -153,7 +153,7 @@ app.ConsumeBatch("ORDERS", "loader", nats.TypedBatch(func(ctx context.Context, m
 }), nats.WithBatchSize(100), nats.WithBatchWait(time.Second))
 ```
 
-Any other error fails the whole batch. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it.
+Any other error fails the whole batch, including a `*BatchError` wrapped in `errors.Join` or another error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it.
 
 ### Supervisor
 
@@ -161,7 +161,7 @@ Any other error fails the whole batch. `ConsumeBatch` needs a pull consumer, and
 
 ### Panics
 
-A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
+A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. The requester of a `Reply` handler or micro endpoint that panicked gets `Nats-Service-Error: internal error` with code 500, never the panic text. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
 
 ## Integrations
 
@@ -178,7 +178,7 @@ inv.Endpoint("get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetSto
 inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMetadata(map[string]string{"owner": "ops"})) // inventory.admin.reset
 ```
 
-`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `Reply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff` and `WithDLQ` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint.
+`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `Reply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff` and `WithDLQ` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint, named after the service, the group prefixes and the endpoint joined with `.` (`orders.v2.get`). A request without a reply subject is skipped with a warning.
 
 - An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.
@@ -211,7 +211,7 @@ ack, err := atomicbatch.Publish(ctx, app, []nats.BatchMsg{
 })
 ```
 
-The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. An `WithExpectLastSeq` option only makes sense on the first message of the batch.
+The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. A `WithExpectLastSeq` option only makes sense on the first message of the batch.
 
 ### OpenTelemetry
 
@@ -252,9 +252,9 @@ CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and
 
 ## Lifecycle
 
-- `Start(ctx)` connects, creates or updates declared streams and consumers (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned. Registration mistakes are returned here too.
-- `Shutdown(ctx)` stops intake, waits for in-flight handlers and drains the connection within the context deadline. Unacked JetStream messages are redelivered by the server.
-- `Run(ctx)` is `Start`, wait for `ctx`, then `Shutdown` bounded by `WithShutdownTimeout` (30s by default).
+- `Start(ctx)` connects, creates or updates declared streams and consumers (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned, and `Start` can then be called again. Registration mistakes (including `WithPullMaxMessages(n)` with `n < 1`, a negative `WithTimeout` and an invalid `WithDLQ` subject) are returned here too. `Start` does not hold a lock while it connects, so `Health()` answers meanwhile with `ready` false, and `Conn()` and `JetStream()` return nil unless the app is started or starting.
+- `Shutdown(ctx)` stops intake, waits for in-flight handlers and drains the connection within the context deadline. Unacked JetStream messages are redelivered by the server. A second `Shutdown` that starts while the first is running waits for it and returns its error; a `Shutdown` during `Start` waits for `Start`, or cancels it when its `ctx` ends first.
+- `Run(ctx)` is `Start`, wait for `ctx` or for the connection to be closed for good (then `Run` returns an error wrapping nats.go's `ErrConnectionClosed`), then `Shutdown` bounded by `WithShutdownTimeout` (30s by default).
 - The connection reconnects forever by default (`nats.WithNATSOptions(natsio.MaxReconnects(n))` to change it); while reconnecting, health reports `degraded`.
 - `Health()` and `HealthHandler()` report the connection and every handler; mount the handler on your own HTTP server.
 
@@ -277,23 +277,9 @@ import natsio "github.com/nats-io/nats.go"
 nats.WithNATSOptions(natsio.MaxReconnects(-1))
 ```
 
-## Behaviour changes in M2
+## Status
 
-Three things behave differently from M1:
-
-1. A failed `Consume` message is naked with a delay from the default backoff (`ExponentialBackoff(1s, 1m)`, retried without limit) instead of immediately. Pass `WithBackoff` or `WithMaxAttempts` to change it.
-2. A handler panic no longer crashes the process: the worker recovers it and treats it as an error.
-3. A deleted consumer no longer leaves its handler `stopped` for good: it goes to `restarting` and recovers.
-
-## Roadmap
-
-| Milestone | Status | Scope |
-|---|---|---|
-| M1 Core | available | Typed handlers, core and JetStream consumers, publishing, middleware, lifecycle, health |
-| M2 Reliability | available | Retry with backoff, dead-letter queue, idempotency (in-memory or KV), batch handlers, handler auto-restart |
-| M3 Integrations | available | NATS micro services, OpenTelemetry (subpackage `natsotel`), CloudEvents (`cloudevents`), batch and atomic batch publish (`atomicbatch`) |
-
-The API may change until v1.0.0.
+All features above are available. The API may change until v1.0.0.
 
 ## License
 

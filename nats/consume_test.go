@@ -164,7 +164,7 @@ func TestConsumePanicWithRecoverKeepsWorking(t *testing.T) {
 	}
 }
 
-// M2 ruling: a deleted consumer makes the handler restart, never stop while
+// A deleted consumer makes the handler restart, never stop while
 // the App runs.
 func TestConsumeStoppedWhenConsumerDeleted(t *testing.T) {
 	s := runServer(t)

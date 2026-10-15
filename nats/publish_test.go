@@ -97,7 +97,7 @@ func TestJSOnlyOptionRejectedOnPublish(t *testing.T) {
 	a := newApp(t, runServer(t))
 	start(t, a)
 	if err := a.Publish(context.Background(), "x", nil, WithMsgID("1")); err == nil {
-		t.Fatal("MsgID requires PublishJS")
+		t.Fatal("WithMsgID requires PublishJS")
 	}
 }
 

@@ -223,3 +223,13 @@ func TestHandleRegistrationErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHandleNilTyped(t *testing.T) {
+	a := newApp(t, runServer(t).ClientURL())
+	ev := cloudevents.New(a, "src")
+	var nilFn func(context.Context, cloudevents.Event, *nats.Msg[[]byte]) error
+	ev.Handle("order.created", cloudevents.Typed(nilFn))
+	if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "nil handler") {
+		t.Fatalf("Start err = %v, want nil handler error", err)
+	}
+}

@@ -42,7 +42,7 @@ func TestHealthLifecycle(t *testing.T) {
 	}
 }
 
-// M2 ruling: a deleted consumer makes the handler restarting, not stopped.
+// A deleted consumer makes the handler restarting, not stopped.
 func TestHealthDegradedWhenHandlerStopped(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s, WithRestartBackoff(func(int) time.Duration { return time.Hour }))

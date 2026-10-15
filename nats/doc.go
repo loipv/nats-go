@@ -23,14 +23,26 @@
 //
 // Start connects, creates or updates declared streams and consumers, checks
 // that every consumed consumer exists and starts every handler, in that
-// order; no handler receives a message before every check has passed. The first failure stops everything already started and is returned.
-// Registration mistakes (empty subject, an option used on the wrong kind of
-// handler, a duplicate consumer) are collected and returned by Start too.
+// order; no handler receives a message before every check has passed. The first
+// failure stops everything already started and is returned, and Start may then
+// be called again. Registration mistakes (empty subject, an option used on the
+// wrong kind of handler, an invalid option value, a duplicate consumer) are
+// collected and returned by Start too.
+//
+// Start does not hold the App lock while it connects, so Health and
+// HealthHandler answer during startup with ready false; Conn and JetStream
+// return nil unless the App is started or starting. Registering after Start
+// began is rejected.
 //
 // Shutdown stops intake, waits for in-flight handlers and drains the
-// connection, bounded by its context. Run calls Start, waits for its context
-// to be cancelled and calls Shutdown with the WithShutdownTimeout limit.
-// Programs that only publish can call Start and Shutdown directly.
+// connection, bounded by its context. A second Shutdown that starts while the
+// first is running waits for it and returns the same error. A Shutdown during
+// Start waits for Start, or cancels it when its context ends first. Run calls
+// Start, waits for its context to be cancelled or for the connection to be
+// closed for good (it then returns an error wrapping nats.go's
+// ErrConnectionClosed after shutting down), and calls Shutdown with the
+// WithShutdownTimeout limit. Programs that only publish can call Start and
+// Shutdown directly.
 //
 // # Handlers
 //
@@ -69,6 +81,10 @@
 // Using WithManualAck, the handler acks itself through Msg.Ack, Nak, NakWithDelay,
 // Term and InProgress, and the returned error is only logged.
 //
+// Option values are checked at registration: WithPullMaxMessages needs n of at
+// least 1 and WithTimeout a duration of 0 (no timeout) or more. Both are
+// reported by Start, as is WithPullMaxMessages on a push consumer.
+//
 // # Reliability
 //
 // Failed messages are retried with a backoff and, when they run out of
@@ -98,12 +114,15 @@
 //	DLQ publish fails                             -                   log, NakWithDelay
 //
 // A panic in a handler is recovered by the worker and handled like any other
-// error. Recover only turns the panic into an error earlier, for the
-// middleware around it.
+// error; the panic value and stack are logged. A requester of a Reply handler
+// or micro endpoint that panicked receives Nats-Service-Error "internal
+// error" with code 500, never the panic text. Recover only turns the panic
+// into an error earlier, for the middleware around it.
 //
-// The DLQ subject must be captured by an existing stream other than the
-// handler's source stream, and must not match a Subscribe or Reply handler's
-// own subject; Start fails otherwise. The dead-lettered message keeps its payload and headers and gains
+// The DLQ subject must be a valid subject without wildcard tokens (* or >),
+// captured by an existing stream other than the handler's source stream, and
+// must not match a Subscribe or Reply handler's own subject; Start fails
+// otherwise. The dead-lettered message keeps its payload and headers and gains
 // Nats-DLQ-Error, Nats-DLQ-Subject and Nats-DLQ-Deliveries, plus, for
 // JetStream consumers, Nats-DLQ-Stream, Nats-DLQ-Consumer, Nats-DLQ-Sequence
 // and Nats-DLQ-Msg-Id (the original Nats-Msg-Id). Publishing the same message
@@ -131,7 +150,8 @@
 //
 // ConsumeBatch passes up to WithBatchSize messages (waiting at most WithBatchWait) to
 // one call on a pull consumer. Return nil to ack them all, a *BatchError to
-// fail only the listed indexes, or any other error to fail them all. Failed
+// fail only the listed indexes, or any other error to fail them all; a
+// *BatchError inside errors.Join or a wrapper fails them all too. Failed
 // messages follow the table above. Middleware does not apply to batches, and
 // Idempotent cannot be used with them.
 //
@@ -143,17 +163,6 @@
 // counts the restarts, and App.Health reports "degraded" meanwhile. A push
 // consumer should set IdleHeartbeat: without it a deleted push consumer cannot
 // be detected.
-//
-// # Behaviour changes in M2
-//
-// Three behaviours differ from M1:
-//
-//   - A failed message of a Consume handler is naked with a delay from the
-//     default backoff ExponentialBackoff(1s, 1m) instead of immediately.
-//   - A panic in a handler no longer crashes the process; it is recovered and
-//     treated as an error.
-//   - A deleted consumer makes the handler "restarting" and recovers, instead
-//     of leaving it "stopped" for good.
 //
 // # Publishing
 //
@@ -176,7 +185,9 @@
 // Endpoint adds typed endpoints to it, or to a Group of it, and works like
 // Reply: the returned value is encoded and sent back, and an error becomes a
 // micro service error (code 400 for Terminal, 500 otherwise) that the service
-// STATS count. The WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff and WithDLQ options
+// STATS count. A request without a reply subject is skipped with a warning.
+// Health reports one handler per endpoint, named after the service, the
+// group prefixes and the endpoint joined with "." (orders.v2.get). The WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff and WithDLQ options
 // apply; WithEndpointSubject and WithEndpointMetadata are specific to endpoints.
 //
 //	svc := app.Service(micro.Config{Name: "inventory", Version: "1.0.0"})
@@ -210,7 +221,7 @@
 //   - natsotel adds OpenTelemetry tracing and metrics as middleware.
 //   - cloudevents publishes and handles CloudEvents v1.0 events.
 //
-// App.Message builds a message the way Publish would, without sending it, and
+// App.Message builds the message PublishJS would send, without sending it, and
 // App.WrapPublish wraps a send function with the registered PublishMiddleware;
 // the subpackages use them. Attempt returns the attempt of the message being
 // handled, for middleware.

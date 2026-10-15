@@ -86,13 +86,13 @@ func TestMsgAckOnCoreReturnsErrNotJetStream(t *testing.T) {
 
 func TestHandlerOptionRules(t *testing.T) {
 	if _, err := newHandlerConfig(kindOrdered, []HandlerOption{WithManualAck()}); err == nil {
-		t.Fatal("ManualAck not allowed on ordered")
+		t.Fatal("WithManualAck not allowed on ordered")
 	}
 	if _, err := newHandlerConfig(kindConsume, []HandlerOption{WithQueue("q")}); err == nil {
-		t.Fatal("Queue not allowed on consume")
+		t.Fatal("WithQueue not allowed on consume")
 	}
 	if _, err := newHandlerConfig(kindSubscribe, []HandlerOption{WithConcurrency(0)}); err == nil {
-		t.Fatal("Concurrency(0) invalid")
+		t.Fatal("WithConcurrency(0) invalid")
 	}
 	c, err := newHandlerConfig(kindSubscribe, nil)
 	if err != nil || c.concurrency != 1 {
@@ -153,5 +153,38 @@ func TestPullMaxMessagesOnPushConsumer(t *testing.T) {
 	a.Consume("ORDERS", "push", Typed(func(context.Context, *Msg[order]) error { return nil }), WithPullMaxMessages(10))
 	if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "WithPullMaxMessages") {
 		t.Fatal("want Start error naming WithPullMaxMessages, got", err)
+	}
+}
+
+func TestOptionErrorsUseNewNames(t *testing.T) {
+	s := runServer(t)
+	noop := Typed(func(context.Context, *Msg[[]byte]) error { return nil })
+	batch := TypedBatch(func(context.Context, []*Msg[[]byte]) error { return nil })
+	cases := map[string]struct {
+		register func(a *App)
+		want     string
+	}{
+		"handler kind": {func(a *App) { a.Subscribe("x", noop, WithManualAck()) }, "WithManualAck"},
+		"max attempts": {func(a *App) { a.Subscribe("x", noop, WithMaxAttempts(0)) }, "WithMaxAttempts"},
+		"dlq empty":    {func(a *App) { a.Subscribe("x", noop, WithDLQ("")) }, "WithDLQ"},
+		"batch size": {func(a *App) {
+			setupStream(t, a)
+			a.ConsumeBatch("ORDERS", "billing", batch, WithBatchSize(0))
+		}, "WithBatchSize"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := newApp(t, s)
+			c.register(a)
+			if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Start err = %v, want %q", err, c.want)
+			}
+			_ = a.Shutdown(context.Background())
+		})
+	}
+	a := newApp(t, s)
+	start(t, a)
+	if err := a.Publish(context.Background(), "x", 1, WithMsgID("1")); err == nil || !strings.Contains(err.Error(), "WithMsgID") {
+		t.Fatalf("Publish err = %v, want WithMsgID", err)
 	}
 }

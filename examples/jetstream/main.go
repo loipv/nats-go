@@ -60,7 +60,7 @@ func main() {
 	}
 	defer app.Shutdown(ctx)
 
-	// Publishing twice with the same WithMsgID stores the message once.
+	// Publishing twice with the same ID (WithMsgID) stores the message once.
 	order := Order{ID: fmt.Sprintf("o-%d", time.Now().UnixNano()), Amount: 100}
 	for range 2 {
 		ack, err := app.PublishJS(ctx, "orders.created", order, nats.WithMsgID(order.ID))
