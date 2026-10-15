@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -25,6 +26,55 @@ type Msg[T any] struct {
 
 	js      jetstream.Msg
 	attempt int
+	codec   Codec
+	// replyOwned is set in SubscribeReply and endpoint handlers, which respond
+	// with their return value.
+	replyOwned bool
+}
+
+// canRespond reports why m cannot be responded to by hand, if it cannot.
+func (m *Msg[T]) canRespond() error {
+	switch {
+	case m.Raw == nil:
+		return natsio.ErrMsgNotBound // a Msg built by hand, as in a unit test
+	case m.js != nil:
+		return ErrNotCore
+	case m.replyOwned:
+		return errReplyOwned
+	}
+	return nil
+}
+
+// Respond answers a request received by Subscribe: v is encoded with the app
+// codec ([]byte as is) and sent to the reply subject. It does not go through
+// publish middleware. It returns ErrNotCore on a JetStream message, an error
+// in a SubscribeReply or endpoint handler (return the response instead), and
+// nats.go's ErrMsgNoReply when the message has no reply subject. A handler
+// retried by WithMaxAttempts responds again on every attempt that calls it;
+// the requester only reads the first response.
+func (m *Msg[T]) Respond(v any) error {
+	if err := m.canRespond(); err != nil {
+		return err
+	}
+	data, err := encode(m.codec, v)
+	if err != nil {
+		return fmt.Errorf("nats: encode response: %w", err)
+	}
+	return m.Raw.Respond(data)
+}
+
+// RespondError answers a request received by Subscribe with err, as
+// SubscribeReply does: in the Nats-Service-Error headers, with code 400 for
+// Terminal errors and 500 otherwise, and "internal error" for a panic. The
+// requester's App.Request returns it as *ServiceError. It fails like Respond.
+func (m *Msg[T]) RespondError(err error) error {
+	if cerr := m.canRespond(); cerr != nil {
+		return cerr
+	}
+	if err == nil {
+		return errors.New("nats: RespondError: nil error")
+	}
+	return respondError(m.Raw, err)
 }
 
 // Attempt returns the 1-based attempt of the message: the JetStream delivery
@@ -361,7 +411,9 @@ func decodeMsg[T any](c Codec, ctx context.Context, raw *RawMsg) (*Msg[T], error
 			return nil, Terminal(fmt.Errorf("nats: validate: %w", err))
 		}
 	}
-	return &Msg[T]{Subject: raw.Subject, Header: raw.Header, Data: data, Raw: raw, js: jsMsgFrom(ctx), attempt: attemptFrom(ctx)}, nil
+	_, owned := ctx.Value(replyKey{}).(*reply)
+	return &Msg[T]{Subject: raw.Subject, Header: raw.Header, Data: data, Raw: raw, js: jsMsgFrom(ctx), attempt: attemptFrom(ctx),
+		codec: c, replyOwned: owned}, nil
 }
 
 // chain wraps h with handler middleware, then app middleware, then the

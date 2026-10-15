@@ -72,6 +72,8 @@ func main() {
 
 Handlers are registered with `App` methods and wrapped in `nats.Typed` (`nats.TypedReply` for `SubscribeReply` and service endpoints, `nats.TypedBatch` for `ConsumeBatch`), because Go methods cannot have type parameters. The payload type is inferred from the handler, and passing a handler of the wrong kind does not compile.
 
+`SubscribeReply` covers the usual one request, one response. For anything else, such as answering only some messages of a subject, a `Subscribe` handler can answer by hand with `m.Respond(v)` or `m.RespondError(err)`; the requester sees the same response and `*ServiceError` as from `SubscribeReply`. Both return `nats.ErrNotCore` on a JetStream message (its reply subject is the ack subject) and an error inside `SubscribeReply` or an endpoint, whose return value is the response.
+
 ## Examples
 
 Start a server with `nats-server -js`, then run any example with `go run ./examples/<name>`. Set `NATS_URL` to use another server.

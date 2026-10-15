@@ -13,6 +13,9 @@ var (
 	ErrAlreadyStarted = errors.New("nats: app already started")
 	// ErrNotJetStream is returned when calling an ack method on a core NATS message.
 	ErrNotJetStream = errors.New("nats: not a JetStream message")
+	// ErrNotCore is returned by Msg.Respond and Msg.RespondError on a JetStream
+	// message, whose reply subject is its ack subject.
+	ErrNotCore = errors.New("nats: not a core NATS message")
 	// ErrDuplicate is returned by IdempotencyStore.Begin when the key was already completed.
 	ErrDuplicate = errors.New("nats: duplicate message")
 	// ErrInProgress is returned by IdempotencyStore.Begin when the key is claimed and not yet completed.
@@ -21,6 +24,10 @@ var (
 
 // errMaxAttempts is the DLQ cause of a message redelivered past WithMaxAttempts.
 var errMaxAttempts = errors.New("nats: max attempts exceeded")
+
+// errReplyOwned is returned by Msg.Respond in a SubscribeReply or endpoint
+// handler, whose return value is the response.
+var errReplyOwned = errors.New("nats: Respond inside SubscribeReply or an endpoint: return the response instead")
 
 type terminalError struct{ err error }
 

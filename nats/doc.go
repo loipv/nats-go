@@ -65,6 +65,8 @@
 //
 //   - Subscribe handles core NATS messages, with wildcards and queue groups (WithQueue).
 //   - SubscribeReply answers requests; the returned value is encoded and sent back.
+//     A Subscribe handler can also answer by hand with Msg.Respond and
+//     Msg.RespondError.
 //   - Consume handles a durable JetStream consumer; pull and push consumers
 //     are detected at Start.
 //   - ConsumeOrdered reads a stream in order through an ephemeral ordered
