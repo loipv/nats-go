@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/loipv/nats-go/nats"
@@ -24,6 +25,7 @@ type Job struct {
 
 func main() {
 	deadLettered := make(chan struct{})
+	var once sync.Once
 	app, err := nats.New(
 		nats.WithURL(natsURL()),
 		nats.WithOnRetry(func(e nats.MsgEvent) {
@@ -31,7 +33,7 @@ func main() {
 		}),
 		nats.WithOnDeadLettered(func(e nats.MsgEvent) {
 			fmt.Printf("event: dead-lettered %s after attempt %d: %v\n", e.Subject, e.Attempt, e.Err)
-			close(deadLettered)
+			once.Do(func() { close(deadLettered) })
 		}),
 		nats.WithOnDisconnected(func(err error) {
 			fmt.Printf("event: disconnected: %v\n", err)
@@ -76,7 +78,9 @@ func main() {
 		log.Fatal("timed out waiting for the dead-letter event")
 	}
 
-	if err := app.Shutdown(ctx); err != nil {
+	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer scancel()
+	if err := app.Shutdown(sctx); err != nil {
 		log.Fatal(err)
 	}
 }
