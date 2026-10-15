@@ -35,7 +35,11 @@ func main() {
 		log.Fatal(err)
 	}
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
-	defer tp.Shutdown(ctx)
+	defer func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 	// natsotel uses the global provider and propagator by default.
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
@@ -57,7 +61,11 @@ func main() {
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer app.Shutdown(ctx)
+	defer func() {
+		if err := app.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 
 	if err := app.Publish(ctx, "otel.orders.created", Order{ID: "42"}); err != nil {
 		log.Fatal(err)

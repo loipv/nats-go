@@ -59,7 +59,11 @@ func main() {
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer app.Shutdown(ctx)
+	defer func() {
+		if err := app.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 
 	order := Order{ID: fmt.Sprintf("o-%d", time.Now().UnixNano())}
 	var last uint64

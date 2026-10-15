@@ -41,7 +41,11 @@ func main() {
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer app.Shutdown(ctx)
+	defer func() {
+		if err := app.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 
 	for i, subject := range []string{"events.eu.signup", "events.us.signup", "events.eu.login"} {
 		if _, err := app.PublishJS(ctx, subject, Event{Name: fmt.Sprintf("event-%d", i+1)}); err != nil {

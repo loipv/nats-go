@@ -34,7 +34,11 @@ func main() {
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer app.Shutdown(ctx)
+	defer func() {
+		if err := app.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 
 	// The request timeout comes from the context.
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)

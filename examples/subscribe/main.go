@@ -40,7 +40,11 @@ func main() {
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer app.Shutdown(ctx)
+	defer func() {
+		if err := app.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 
 	for _, subject := range []string{"orders.created", "orders.shipped", "orders.eu.created"} {
 		if err := app.Publish(ctx, subject, Order{ID: "42"}); err != nil {

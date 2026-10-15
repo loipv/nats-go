@@ -42,7 +42,11 @@ func main() {
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer app.Shutdown(ctx)
+	defer func() {
+		if err := app.Shutdown(ctx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}()
 
 	err = ce.Publish(ctx, "order.created", OrderCreated{ID: "42", Total: 1999},
 		cloudevents.WithExtension("region", "eu"),
