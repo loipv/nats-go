@@ -95,7 +95,13 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *si
 		}
 		msgs, err := r.fetch(ctx)
 		if ctx.Err() != nil {
-			// Stopping: the server redelivers fetched messages after AckWait.
+			// Stopping: hand the fetched messages back now rather than
+			// after AckWait.
+			for _, m := range msgs {
+				if err := m.Nak(); err != nil {
+					log.Debug("nats: nak on stop failed", "subject", m.Subject(), "error", err)
+				}
+			}
 			return
 		}
 		if len(msgs) > 0 {

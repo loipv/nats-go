@@ -637,3 +637,63 @@ func TestEventHandlerStoppedCallbackMayCallApp(t *testing.T) {
 		t.Fatalf("Publish from OnHandlerStopped: %v", err)
 	}
 }
+
+// smallBatchConsumer declares a consumer whose pull requests may ask for at
+// most 1 message, so any larger pull fails with a 409 from the server.
+func smallBatchConsumer(t *testing.T, a *App) {
+	t.Helper()
+	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
+	a.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy, MaxRequestBatch: 1})
+}
+
+func hasAsyncPrefix(errs func() []AsyncErrorEvent, handler, prefix string) func() bool {
+	return func() bool {
+		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
+			return e.Handler == handler && strings.HasPrefix(e.Err.Error(), prefix)
+		})
+	}
+}
+
+func TestEventAsyncConsume(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	smallBatchConsumer(t, a)
+	a.Consume("ORDERS", "billing", Typed(nopOrder), WithPullMaxMessages(10))
+	start(t, a)
+	waitFor(t, hasAsyncPrefix(errs, "ORDERS/billing", "consume: "))
+}
+
+func TestEventAsyncFetch(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	smallBatchConsumer(t, a)
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error { return nil }),
+		WithBatchSize(10), WithBatchWait(100*time.Millisecond))
+	start(t, a)
+	waitFor(t, hasAsyncPrefix(errs, "ORDERS/billing", "fetch: "))
+}
+
+// A Shutdown during restart attempts reports no error caused by stopping.
+func TestEventNoRestartErrorOnShutdown(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	seed := newApp(t, s)
+	setupStream(t, seed)
+	start(t, seed)
+	a := newApp(t, s, WithOnAsyncError(onErr),
+		WithRestartBackoff(func(int) time.Duration { return time.Millisecond }))
+	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	start(t, a)
+	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
+	waitFor(t, hasAsyncPrefix(errs, "ORDERS/billing", "restart: "))
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range errs() {
+		if errors.Is(e.Err, context.Canceled) {
+			t.Fatalf("event caused by Shutdown: %+v", e)
+		}
+	}
+}

@@ -15,7 +15,8 @@ type dlqSource struct {
 	stream, consumer string
 	seq              uint64
 	deliveries       int
-	// msgID is true when seq is known, so the DLQ copy gets a stable Nats-Msg-Id.
+	// msgID is true when seq is known, so the DLQ copy gets
+	// Nats-DLQ-Sequence and a stable Nats-Msg-Id.
 	msgID bool
 }
 
@@ -35,6 +36,8 @@ func (a *App) publishDLQ(ctx context.Context, subject string, orig *RawMsg, caus
 	h.Set("Nats-DLQ-Deliveries", strconv.Itoa(src.deliveries))
 	if src.stream != "" {
 		h.Set("Nats-DLQ-Stream", src.stream)
+	}
+	if src.msgID { // the sequence is known
 		h.Set("Nats-DLQ-Sequence", strconv.FormatUint(src.seq, 10))
 	}
 	if src.consumer != "" {

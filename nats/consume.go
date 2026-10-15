@@ -265,10 +265,14 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 }
 
 // consume starts consuming the consumer r resolved in prepare. It holds mu
-// until cc is set, so onErr never sees a consume context it does not know.
+// until cc is set, so onErr never sees a consume context it does not know,
+// and refuses once stop began, so stop always sees the last cc.
 func (rn *jsRunner) consume(r *jsReg, cb jetstream.MessageHandler, onErr jetstream.ConsumeErrHandler) error {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
+	if err := rn.ctx.Err(); err != nil {
+		return err
+	}
 	var cc jetstream.ConsumeContext
 	var err error
 	if r.push != nil {
@@ -322,9 +326,14 @@ func (r *jsRunner) supervise(cc jetstream.ConsumeContext, err error, fn func(ctx
 	go func() {
 		defer close(done)
 		for err != nil {
-			fn(r.ctx, cc, err)
+			if r.ctx.Err() == nil {
+				fn(r.ctx, cc, err)
+			}
 			r.mu.Lock()
 			cc, err, r.pendingCC, r.pendingErr = r.pendingCC, r.pendingErr, nil, nil
+			if r.ctx.Err() != nil {
+				err = nil // stopping: a pending error is not worth a lookup
+			}
 			if err == nil {
 				r.supervisor = nil
 			}

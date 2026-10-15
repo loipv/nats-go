@@ -195,3 +195,47 @@ func TestBatchJoinedNilBatchErrorFails(t *testing.T) {
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
 	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
 }
+
+// Messages fetched but not yet handled when the handler stops are nakked,
+// so they are redelivered at once instead of after AckWait.
+func TestConsumeBatchNaksFetchedOnStop(t *testing.T) {
+	s := runServer(t)
+	obs := newApp(t, s)
+	obs.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
+	obs.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy, AckWait: time.Minute})
+	start(t, obs)
+	a := newApp(t, s)
+	called := make(chan struct{}, 1)
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error {
+		called <- struct{}{}
+		return nil
+	}), WithBatchSize(10), WithBatchWait(10*time.Second))
+	start(t, a)
+	if _, err := obs.PublishJS(context.Background(), "orders.x", order{ID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	// Fetched, and the fetch waits for more.
+	waitFor(t, func() bool { return pendingAcks(t, obs, "billing") == 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	expectNone(t, called, 100*time.Millisecond)
+	// Without the nak the message would come back only after AckWait (1m).
+	c, err := obs.JetStream().Consumer(context.Background(), "ORDERS", "billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := c.Fetch(1, jetstream.FetchMaxWait(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for range b.Messages() {
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("redelivered %d messages within 3s, want 1", n)
+	}
+}

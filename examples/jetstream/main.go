@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/loipv/nats-go/nats"
@@ -37,19 +36,27 @@ func main() {
 	app.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy})
 	app.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "audit", AckPolicy: jetstream.AckExplicitPolicy})
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// The durable consumers outlive this process, so they may also deliver
+	// orders left over from an earlier, interrupted run: each handler
+	// reports only this run's order.
+	order := Order{ID: fmt.Sprintf("o-%d", time.Now().UnixNano()), Amount: 100}
+	done := make(chan struct{}, 2)
+	mine := func(m *nats.Msg[Order]) {
+		if m.Data.ID == order.ID {
+			done <- struct{}{}
+		}
+	}
 
 	// Automatic ack: nil acks, nats.Terminal(err) terms, other errors nak.
 	app.Consume("ORDERS", "billing", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
-		defer wg.Done()
+		defer mine(m)
 		fmt.Printf("billing: charged %d for order %s\n", m.Data.Amount, m.Data.ID)
 		return nil
 	}))
 
 	// Manual ack: the handler decides.
 	app.Consume("ORDERS", "audit", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
-		defer wg.Done()
+		defer mine(m)
 		fmt.Printf("audit: recorded order %s\n", m.Data.ID)
 		return m.Ack()
 	}), nats.WithManualAck())
@@ -65,7 +72,6 @@ func main() {
 	}()
 
 	// Publishing twice with the same ID (WithMsgID) stores the message once.
-	order := Order{ID: fmt.Sprintf("o-%d", time.Now().UnixNano()), Amount: 100}
 	for range 2 {
 		ack, err := app.PublishJS(ctx, "orders.created", order, nats.WithMsgID(order.ID))
 		if err != nil {
@@ -73,7 +79,13 @@ func main() {
 		}
 		fmt.Printf("published seq=%d duplicate=%v\n", ack.Sequence, ack.Duplicate)
 	}
-	wg.Wait()
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			log.Fatal("order not handled within 10s")
+		}
+	}
 }
 
 func natsURL() string {

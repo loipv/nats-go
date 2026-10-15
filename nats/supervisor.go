@@ -125,6 +125,9 @@ func (a *App) superviseLoop(ctx context.Context, reconnect func(ctx context.Cont
 		if err == nil {
 			return true
 		}
+		if ctx.Err() != nil {
+			return false // failed because stopping, not worth a warning
+		}
 		log.Warn("nats: restart consumer", "attempt", k, "error", err)
 		log.asyncErr("", fmt.Errorf("restart: %w", err))
 	}

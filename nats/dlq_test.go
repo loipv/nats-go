@@ -50,9 +50,16 @@ func TestConsumeRetriesThenDLQ(t *testing.T) {
 		return errors.New("db down")
 	}), WithMaxAttempts(3), fast, WithDLQ("dlq.orders"))
 	start(t, a)
-	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("m-1"))
+	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("m-1"), WithExpectStream("ORDERS")); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) == 1 })
 	d := dlqMsgs(t, a)[0]
+	// The copy is deduplicated by source position, and the original's
+	// publish expectations are dropped so the DLQ stream accepts it.
+	if id, exp := d.Header.Get("Nats-Msg-Id"), d.Header.Get("Nats-Expected-Stream"); id != "dlq:ORDERS:1" || exp != "" {
+		t.Fatalf("Nats-Msg-Id = %q want dlq:ORDERS:1, Nats-Expected-Stream = %q want empty", id, exp)
+	}
 	if calls.Load() != 3 || string(d.Data) != `{"id":"1"}` {
 		t.Fatal(calls.Load(), string(d.Data))
 	}
