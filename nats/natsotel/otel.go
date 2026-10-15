@@ -1,15 +1,3 @@
-// Package natsotel adds OpenTelemetry tracing and metrics to a nats.App.
-//
-// Register Middleware with App.Use and PublishMiddleware with App.UsePublish.
-// The trace context travels in the message headers (W3C traceparent by
-// default), so a consumer span becomes a child of the producer span.
-//
-// Not covered: ConsumeBatch handlers (they have no middleware) and responses
-// sent by Reply workers or micro endpoints (they bypass PublishMiddleware).
-//
-// Metric attributes include the destination name. When subjects contain
-// identifiers, set WithDestination to a low-cardinality value such as the
-// subscription pattern.
 package natsotel
 
 import (

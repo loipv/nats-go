@@ -6,6 +6,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.54.0
 	github.com/synadia-io/orbit.go/jetstreamext v0.3.2
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.47.0
 )
 
 require github.com/google/uuid v1.6.0 // indirect

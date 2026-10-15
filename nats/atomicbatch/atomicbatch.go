@@ -1,6 +1,3 @@
-// Package atomicbatch publishes a batch of messages to JetStream so that the
-// server stores all of them or none (server 2.12 or later, stream with
-// AllowAtomicPublish).
 package atomicbatch
 
 import (

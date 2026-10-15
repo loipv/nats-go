@@ -7,6 +7,7 @@ A Go framework for building [NATS](https://nats.io) and JetStream services on to
 - **JetStream**: pull, push and ordered consumers, automatic or manual ack
 - **Publishing**: fire-and-forget, typed request/reply, JetStream with ack and deduplication
 - **Reliability**: retry with backoff, dead-letter queue, idempotency (in-memory or KV), batch handlers, automatic restart of consumers, panic recovery
+- **Integrations**: NATS micro services, batch and atomic batch publishing, OpenTelemetry tracing and metrics, CloudEvents
 - **Streams and consumers declared in code**, created or updated on startup
 - **Middleware** on the inbound and outbound paths
 - **Fail-fast startup**, **graceful shutdown** with a deadline, **health** endpoint
@@ -18,7 +19,9 @@ A Go framework for building [NATS](https://nats.io) and JetStream services on to
 go get github.com/loipv/nats-go
 ```
 
-Requires Go 1.26+ and nats-server 2.10+. `KVStore` requires nats-server 2.11+.
+Requires Go 1.26+ and nats-server 2.10+. `KVStore` requires nats-server 2.11+, and atomic batch publishing (`atomicbatch`) requires 2.12+ and a stream with `AllowAtomicPublish`.
+
+The core `nats` package has no dependency beyond nats.go. OpenTelemetry (`natsotel`) and atomic batches (`atomicbatch`) live in subpackages, so you only pull in their dependencies when you import them.
 
 ## Quick start
 
@@ -82,6 +85,10 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [retry-dlq](examples/retry-dlq) | `MaxAttempts`, `WithBackoff`, `DLQ` on a JetStream consumer and a core subscription, `Nats-DLQ-*` headers |
 | [idempotency](examples/idempotency) | `Idempotent` with a `KVStore`, a custom key, one execution for three deliveries |
 | [batch](examples/batch) | `ConsumeBatch`, `BatchError`, retry and DLQ per message |
+| [micro-service](examples/micro-service) | `Service`, `Group` and `Endpoint`; found by `nats micro info inventory` |
+| [otel](examples/otel) | `natsotel` middleware: producer and consumer spans in one trace, printed to stdout |
+| [cloudevents](examples/cloudevents) | `cloudevents.New`, `Handle` and `Publish` with an extension |
+| [batch-publish](examples/batch-publish) | `PublishJSBatch`, and `atomicbatch.Publish` rolling back a batch with a foreign subject |
 
 ## How handler errors are handled
 
@@ -154,6 +161,93 @@ Any other error fails the whole batch. `ConsumeBatch` needs a pull consumer, and
 
 A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
 
+## Integrations
+
+### Micro services
+
+```go
+svc := nats.Service(app, micro.Config{Name: "inventory", Version: "1.0.0"}) // micro is github.com/nats-io/nats.go/micro
+inv := svc.Group("inventory")
+
+nats.Endpoint(inv, "get", func(ctx context.Context, m *nats.Msg[GetStock]) (Stock, error) {
+	return Stock{SKU: m.Data.SKU, Quantity: 10}, nil
+}) // subject inventory.get
+
+nats.Endpoint(inv.Group("admin"), "reset", reset, nats.EndpointMetadata(map[string]string{"owner": "ops"})) // inventory.admin.reset
+```
+
+`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `Reply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `Timeout`, `With`, `MaxAttempts`, `WithBackoff` and `DLQ` apply; `EndpointSubject` and `EndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint.
+
+- An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
+- `MaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.
+- On shutdown, requests already delivered are drained and answered. A handler that publishes through the `App` during the drain fails, because publishing is closed.
+- A middleware that does not call `next` makes the endpoint send an empty response.
+
+### Batch publishing
+
+```go
+acks, err := app.PublishJSBatch(ctx, []nats.BatchMsg{
+	{Subject: "orders.created", Data: o1, Opts: []nats.PubOption{nats.MsgID("o1")}},
+	{Subject: "orders.created", Data: o2},
+})
+var be *nats.PublishBatchError
+if errors.As(err, &be) {
+	for i, e := range be.Failed { /* message i failed */ }
+}
+```
+
+`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the context's means the outcome is unknown: the message may have been stored. A message that cannot be encoded fails the whole call before anything is sent. More than about 4000 messages in flight can stall the call; split bigger batches.
+
+For all-or-nothing publishing use `atomicbatch`:
+
+```go
+import "github.com/loipv/nats-go/nats/atomicbatch"
+
+ack, err := atomicbatch.Publish(ctx, app, []nats.BatchMsg{
+	{Subject: "orders.created", Data: order},
+	{Subject: "orders.items", Data: items},
+})
+```
+
+The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. An `ExpectLastSeq` option only makes sense on the first message of the batch.
+
+### OpenTelemetry
+
+```go
+import "github.com/loipv/nats-go/nats/natsotel"
+
+otel.SetTextMapPropagator(propagation.TraceContext{}) // plus your tracer and meter providers
+app.Use(natsotel.Middleware())
+app.UsePublish(natsotel.PublishMiddleware())
+```
+
+The trace context travels in the message headers: a `send <subject>` producer span is the parent of the `process <subject>` consumer span, across services. Each attempt is its own span, with `messaging.nats.attempt`. The middleware records `messaging.client.operation.duration`, `messaging.client.sent.messages`, `messaging.process.duration` and `messaging.client.consumed.messages`. A message skipped by `Idempotent` is tagged `messaging.nats.duplicate` and is not counted as an error. The global providers and propagator are used unless you pass `WithTracerProvider`, `WithMeterProvider` or `WithPropagator`.
+
+- **Cardinality**: the destination name is the message subject by default, and it is a metric attribute. Subjects that contain identifiers (`orders.42.created`) create one series each. Use `natsotel.WithDestination(func(subject string) string { ... })` to map them to something bounded such as `orders.*.created`.
+- **Not covered**: `ConsumeBatch` handlers (they have no middleware) and responses sent by `Reply` workers or micro endpoints (they do not go through `PublishMiddleware`).
+
+### CloudEvents
+
+```go
+import "github.com/loipv/nats-go/nats/cloudevents"
+
+ce := cloudevents.New(app, "urn:example:shop")
+
+cloudevents.Handle(ce, "order.created", func(ctx context.Context, ev cloudevents.Event, m *nats.Msg[Order]) error {
+	log.Printf("event %s from %s: order %s", ev.ID, ev.Source, m.Data.ID)
+	return nil
+})
+
+err := ce.Publish(ctx, "order.created", order, cloudevents.WithExtension("region", "eu"))
+```
+
+CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and the payload is the body. An event of type `T` is published on `events.T` (change it with `cloudevents.SubjectFunc`). `ce.PublishJS` sends to a stream and uses the event id as `Nats-Msg-Id`, so a repeated id is dropped within the stream's `Duplicates` window. Extra headers go through `cloudevents.WithHeader`; `WithPubOptions` is for core options that are not headers, and must not carry `nats.WithHeader`, which would replace the CloudEvents headers.
+
+- `Handle` is one-way and never replies; use `nats.Reply` for request/reply.
+- An event with invalid attributes (missing `ce-id`, `ce-source`, `ce-type` or `ce-specversion`, a version other than `1.0`, a bad `ce-time`) fails with `nats.Terminal` and the handler is not called; with the `DLQ` option it is dead-lettered.
+- For a JetStream durable consumer, use `nats.Consume` with `cloudevents.FromHeader`.
+- Structured and batched modes are not supported.
+
 ## Lifecycle
 
 - `Start(ctx)` connects, creates or updates declared streams and consumers (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned. Registration mistakes are returned here too.
@@ -195,7 +289,7 @@ Three things behave differently from M1:
 |---|---|---|
 | M1 Core | available | Typed handlers, core and JetStream consumers, publishing, middleware, lifecycle, health |
 | M2 Reliability | available | Retry with backoff, dead-letter queue, idempotency (in-memory or KV), batch handlers, handler auto-restart |
-| M3 Integrations | planned | NATS micro services, OpenTelemetry, CloudEvents, batch and atomic batch publish |
+| M3 Integrations | available | NATS micro services, OpenTelemetry (subpackage `natsotel`), CloudEvents (`cloudevents`), batch and atomic batch publish (`atomicbatch`) |
 
 The API may change until v1.0.0.
 

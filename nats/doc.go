@@ -155,6 +155,47 @@
 // every handler, With for one. Recover and Logger are provided. PublishMiddleware
 // wraps every outgoing message, registered with App.UsePublish.
 //
+// # Integrations
+//
+// Service registers a NATS micro service, found by "nats micro ls|info|stats".
+// Endpoint adds typed endpoints to it, or to a Group of it, and works like
+// Reply: the returned value is encoded and sent back, and an error becomes a
+// micro service error (code 400 for Terminal, 500 otherwise) that the service
+// STATS count. The Timeout, With, MaxAttempts, WithBackoff and DLQ options
+// apply; EndpointSubject and EndpointMetadata are specific to endpoints.
+//
+//	svc := nats.Service(app, micro.Config{Name: "inventory", Version: "1.0.0"})
+//	nats.Endpoint(svc.Group("inventory"), "get", getStock) // subject inventory.get
+//
+// An endpoint handles one request at a time per instance, in micro's
+// goroutine; scale with more instances, which share a queue group.
+// MaxAttempts, WithBackoff and Unlimited stall the endpoint while a request
+// is retried, and the whole retry time must fit the requester's timeout. On
+// Shutdown the requests already delivered are drained and answered, but a
+// handler that publishes through the App then fails, because publishing is
+// closed. A middleware that does not call next makes the endpoint send an
+// empty response.
+//
+// App.PublishJSBatch publishes many messages to JetStream and waits for all
+// the acks together. It is not atomic: acks[i] is non-nil for every message
+// known to be stored, and the *PublishBatchError lists the others by index.
+// An entry whose error is the context's means the outcome is unknown. More
+// than about 4000 messages in flight can stall the call. For all-or-nothing
+// publishing see the atomicbatch package.
+//
+// Three subpackages hold the integrations with extra dependencies, so this
+// package imports none of them:
+//
+//   - atomicbatch publishes a batch that the server stores completely or not
+//     at all (nats-server 2.12 or later, stream with AllowAtomicPublish).
+//   - natsotel adds OpenTelemetry tracing and metrics as middleware.
+//   - cloudevents publishes and handles CloudEvents v1.0 events.
+//
+// App.Message builds a message the way Publish would, without sending it, and
+// App.WrapPublish wraps a send function with the registered PublishMiddleware;
+// the subpackages use them. Attempt returns the attempt of the message being
+// handled, for middleware.
+//
 // # Health
 //
 // App.Health reports the connection and handler state; App.HealthHandler

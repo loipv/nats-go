@@ -1,10 +1,3 @@
-// Package cloudevents publishes and handles CloudEvents v1.0 messages in the
-// binary content mode of the NATS protocol binding: attributes travel in
-// ce-* headers and the payload is the message body.
-//
-// Structured and batched modes are not supported. For JetStream durable
-// consumers, use nats.Consume with FromHeader and filter by type with the
-// consumer's FilterSubject.
 package cloudevents
 
 import (
