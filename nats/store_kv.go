@@ -20,7 +20,9 @@ type KVStore struct {
 }
 
 // NewKVStore registers bucket with app so Start creates it. It does no I/O.
-// An empty bucket fails Start.
+// An empty bucket fails Start. The server only accepts whole-second TTLs of at
+// least one second, so every TTL passed to Begin and Complete is rounded up to
+// the next whole second (500ms becomes 1s, 1.2s becomes 2s).
 func NewKVStore(app *App, bucket string) *KVStore {
 	s := &KVStore{bucket: bucket}
 	if bucket == "" {
@@ -46,6 +48,17 @@ func (s *KVStore) keys(key string) (claim, done string, kv jetstream.KeyValue, e
 	return "c." + h, "d." + h, *p, nil
 }
 
+// keyTTL rounds ttl up to a whole second, the finest per-key TTL the server accepts.
+func keyTTL(ttl time.Duration) jetstream.KVCreateOpt {
+	return jetstream.KeyTTL(max(time.Second, (ttl+time.Second-1)/time.Second*time.Second))
+}
+
+// release removes a claim. The purge marker carries a TTL so it expires on its
+// own; a plain Delete marker would stay in the bucket forever.
+func release(ctx context.Context, kv jetstream.KeyValue, claim string) error {
+	return kv.Purge(ctx, claim, jetstream.PurgeTTL(time.Minute))
+}
+
 // exists reports whether key has a live entry.
 func exists(ctx context.Context, kv jetstream.KeyValue, key string) (bool, error) {
 	_, err := kv.Get(ctx, key)
@@ -66,7 +79,7 @@ func (s *KVStore) Begin(ctx context.Context, key string, ttl time.Duration) erro
 	} else if ok {
 		return ErrDuplicate
 	}
-	if _, err := kv.Create(ctx, c, nil, jetstream.KeyTTL(ttl)); err != nil {
+	if _, err := kv.Create(ctx, c, nil, keyTTL(ttl)); err != nil {
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return ErrInProgress
 		}
@@ -77,7 +90,7 @@ func (s *KVStore) Begin(ctx context.Context, key string, ttl time.Duration) erro
 	if err == nil && !ok {
 		return nil
 	}
-	if derr := kv.Delete(context.WithoutCancel(ctx), c); derr != nil && err == nil {
+	if derr := release(context.WithoutCancel(ctx), kv, c); derr != nil && err == nil {
 		err = derr
 	}
 	if err == nil {
@@ -92,10 +105,10 @@ func (s *KVStore) Complete(ctx context.Context, key string, ttl time.Duration) e
 	if err != nil {
 		return err
 	}
-	if _, err := kv.Create(ctx, d, nil, jetstream.KeyTTL(ttl)); err != nil && !errors.Is(err, jetstream.ErrKeyExists) {
+	if _, err := kv.Create(ctx, d, nil, keyTTL(ttl)); err != nil && !errors.Is(err, jetstream.ErrKeyExists) {
 		return err
 	}
-	return kv.Delete(ctx, c)
+	return release(ctx, kv, c)
 }
 
 // Abort releases the claim on key so a later Begin succeeds.
@@ -104,5 +117,5 @@ func (s *KVStore) Abort(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	return kv.Delete(ctx, c)
+	return release(ctx, kv, c)
 }

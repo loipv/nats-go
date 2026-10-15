@@ -2,6 +2,8 @@ package nats
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -56,5 +58,54 @@ func TestIdempotentAcrossInstancesKV(t *testing.T) {
 	waitFor(t, func() bool { return pendingAcks(t, apps[0], "billing") == 0 && delivered(t, apps[0], "billing") >= 20 })
 	if calls.Load() != 10 {
 		t.Fatal("each key must be processed exactly once", calls.Load())
+	}
+}
+
+// TestKVStoreDoesNotGrow checks that a released claim leaves a purge marker
+// with a TTL, so the marker expires instead of living in the bucket forever.
+func TestKVStoreDoesNotGrow(t *testing.T) {
+	ctx := context.Background()
+	a := newApp(t, runServer(t))
+	st := NewKVStore(a, "IDEM")
+	start(t, a)
+	stream, err := a.JetStream().Stream(ctx, "KV_IDEM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, release := range map[string]func(key string) error{
+		"abort":    func(key string) error { return st.Abort(ctx, key) },
+		"complete": func(key string) error { return st.Complete(ctx, key, time.Minute) },
+	} {
+		key := "grow-" + name
+		if err := st.Begin(ctx, key, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if err := release(key); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(key))
+		m, err := stream.GetLastMsgForSubject(ctx, "$KV.IDEM.c."+hex.EncodeToString(sum[:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Header.Get("Nats-TTL") == "" {
+			t.Fatalf("%s: claim marker has no TTL, it would never be removed: %v", name, m.Header)
+		}
+	}
+}
+
+func TestKVStoreSubSecondTTL(t *testing.T) {
+	ctx := context.Background()
+	a := newApp(t, runServer(t))
+	st := NewKVStore(a, "IDEM")
+	start(t, a)
+	if err := st.Begin(ctx, "k", 500*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Complete(ctx, "k", 500*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Begin(ctx, "k", 500*time.Millisecond); !errors.Is(err, ErrDuplicate) {
+		t.Fatal(err)
 	}
 }
