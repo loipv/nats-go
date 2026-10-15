@@ -13,6 +13,7 @@ import (
 
 	natstest "github.com/nats-io/nats-server/v2/test"
 	natsio "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestEventOptionRejectsNil(t *testing.T) {
@@ -335,4 +336,39 @@ func TestEventConnCallbackPanicRecovered(t *testing.T) {
 	start(t, a)
 	_ = a.Shutdown(context.Background())
 	recv(t, recorded)
+}
+
+func TestEventAsyncRestart(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	seed := newApp(t, s)
+	setupStream(t, seed)
+	start(t, seed)
+	a := newApp(t, s, restartFast, WithOnAsyncError(onErr))
+	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	start(t, a)
+	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
+	waitFor(t, func() bool {
+		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
+			return e.Handler == "ORDERS/billing" && strings.HasPrefix(e.Err.Error(), "restart: ")
+		})
+	})
+	_, _ = a.JetStream().CreateOrUpdateConsumer(context.Background(), "ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy})
+	waitFor(t, func() bool { return a.Health().Status == "ok" })
+}
+
+func TestEventAsyncIdempotencyComplete(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	setupStream(t, a)
+	a.Use(Idempotent(completeFails{NewMemoryStore()}))
+	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("e-1"))
+	waitFor(t, func() bool {
+		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
+			return e.Subject == "orders.x" && strings.HasPrefix(e.Err.Error(), "idempotency complete: ")
+		})
+	})
 }

@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -107,6 +108,7 @@ func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err err
 	}
 	if ackErr != nil {
 		log.Error("nats: ack failed", "subject", raw.Subject, "error", ackErr)
+		log.asyncErr(raw.Subject, fmt.Errorf("ack: %w", ackErr))
 	}
 }
 

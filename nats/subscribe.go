@@ -138,10 +138,12 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			// The requester gets the error even when the message went to the DLQ.
 			if err := respondError(m, err); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
+				log.asyncErr(m.Subject, fmt.Errorf("respond: %w", err))
 			}
 		case resp != nil:
 			if err := m.Respond(resp); err != nil {
 				log.Error("nats: send response", "subject", m.Subject, "error", err)
+				log.asyncErr(m.Subject, fmt.Errorf("respond: %w", err))
 			}
 		}
 	})

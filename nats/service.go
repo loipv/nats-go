@@ -243,10 +243,12 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 			}
 			if err := req.Error(errorCode(err), desc, nil); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
+				log.asyncErr(m.Subject, fmt.Errorf("respond: %w", err))
 			}
 		default:
 			if err := req.Respond(resp); err != nil {
 				log.Error("nats: send response", "subject", m.Subject, "error", err)
+				log.asyncErr(m.Subject, fmt.Errorf("respond: %w", err))
 			}
 		}
 	})

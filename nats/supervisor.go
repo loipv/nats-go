@@ -128,5 +128,6 @@ func (a *App) superviseLoop(ctx context.Context, stopping <-chan struct{}, recon
 			return true
 		}
 		log.Warn("nats: restart consumer", "attempt", k, "error", err)
+		log.asyncErr("", fmt.Errorf("restart: %w", err))
 	}
 }

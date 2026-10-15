@@ -101,6 +101,13 @@ func (s *sink) deadLetterFailed(m *RawMsg, attempt int, err, dlqErr error) {
 	}
 }
 
+// asyncErr emits an error that was only logged; err carries its operation prefix.
+func (s *sink) asyncErr(subject string, err error) {
+	if s.ev != nil {
+		fire(s.Logger, s.ev.asyncError, AsyncErrorEvent{Handler: s.handler, Subject: subject, Err: err})
+	}
+}
+
 func (s *sink) handlerEvent(err error) HandlerEvent {
 	return HandlerEvent{Handler: s.handler, Kind: string(s.kind), Err: err}
 }

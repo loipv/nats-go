@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -75,7 +76,9 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 			// abort releases the claim even if ctx is already cancelled, or the retry sees ErrInProgress.
 			abort := func() {
 				if aerr := store.Abort(context.WithoutCancel(ctx), key); aerr != nil {
-					sinkFrom(ctx).ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
+					log := sinkFrom(ctx)
+					log.ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
+					log.asyncErr(m.Subject, fmt.Errorf("idempotency abort: %w", aerr))
 				}
 			}
 			defer func() {
@@ -91,7 +94,9 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 				return err
 			}
 			if err := store.Complete(context.WithoutCancel(ctx), key, c.doneTTL); err != nil {
-				sinkFrom(ctx).ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
+				log := sinkFrom(ctx)
+				log.ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
+				log.asyncErr(m.Subject, fmt.Errorf("idempotency complete: %w", err))
 			}
 			return nil
 		}

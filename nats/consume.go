@@ -196,6 +196,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 				log.Debug("nats: duplicate message acked", "subject", raw.Subject)
 				if err := jsMsgFrom(ctx).Ack(); err != nil {
 					log.Error("nats: ack failed", "subject", raw.Subject, "error", err)
+					log.asyncErr(raw.Subject, fmt.Errorf("ack: %w", err))
 				}
 			case err != nil:
 				log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
@@ -219,6 +220,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		// nats.go recreates ordered consumers itself.
 		if r.kind == kindOrdered || !mayBeGone(err) {
 			log.Warn("nats: consume", "error", err)
+			log.asyncErr("", fmt.Errorf("consume: %w", err))
 			return
 		}
 		// Off the nats.go goroutine: the lookup in gone blocks, and push
@@ -232,6 +234,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			}
 			if !r.gone(ctx, a, err) {
 				log.Warn("nats: consume", "error", err)
+				log.asyncErr("", fmt.Errorf("consume: %w", err))
 				return
 			}
 			rn.setRestarting(err)

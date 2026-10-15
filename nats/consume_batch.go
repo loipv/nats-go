@@ -111,6 +111,7 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *si
 			rn.setRestarted()
 		default:
 			log.Warn("nats: fetch", "error", err)
+			log.asyncErr("", fmt.Errorf("fetch: %w", err))
 			select {
 			case <-time.After(r.cfg.batchWait):
 			case <-ctx.Done():

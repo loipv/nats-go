@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ func keepAlive(msgs []jetstream.Msg, interval time.Duration, log *sink) (stop fu
 				for _, m := range msgs {
 					if err := m.InProgress(); err != nil {
 						log.Debug("nats: in-progress failed", "error", err)
+						log.asyncErr(m.Subject(), fmt.Errorf("in-progress: %w", err))
 					}
 				}
 			}

@@ -95,13 +95,14 @@ type fakeJSMsg struct {
 	jetstream.Msg
 	called string
 	delay  time.Duration
+	err    error // returned by Ack, TermWithReason and NakWithDelay
 }
 
-func (f *fakeJSMsg) Ack() error                  { f.called = "ack"; return nil }
-func (f *fakeJSMsg) TermWithReason(string) error { f.called = "term"; return nil }
+func (f *fakeJSMsg) Ack() error                  { f.called = "ack"; return f.err }
+func (f *fakeJSMsg) TermWithReason(string) error { f.called = "term"; return f.err }
 func (f *fakeJSMsg) NakWithDelay(d time.Duration) error {
 	f.called, f.delay = "nak", d
-	return nil
+	return f.err
 }
 
 // TestDispose covers the decision table rows without a DLQ; the DLQ rows
@@ -129,6 +130,16 @@ func TestDispose(t *testing.T) {
 		if f.called == "nak" && f.delay != time.Duration(c.attempt)*time.Second {
 			t.Fatal("nak delay", f.delay)
 		}
+	}
+}
+
+func TestDisposeAckFailureEmits(t *testing.T) {
+	var got []AsyncErrorEvent
+	log := &sink{Logger: slog.New(slog.DiscardHandler), handler: "h", ev: &events{asyncError: []func(AsyncErrorEvent){func(e AsyncErrorEvent) { got = append(got, e) }}}}
+	f := &fakeJSMsg{err: errors.New("gone")}
+	(&App{}).dispose(context.Background(), f, &RawMsg{Subject: "s"}, nil, retryConfig{}, dlqSource{deliveries: 1}, log)
+	if len(got) != 1 || got[0].Err.Error() != "ack: gone" || got[0].Handler != "h" || got[0].Subject != "s" {
+		t.Fatalf("got %+v", got)
 	}
 }
 
