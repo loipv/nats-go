@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/synadia-io/orbit.go/jetstreamext"
 )
 
 // BatchMsg is one message of PublishJSBatch.
@@ -117,4 +118,71 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 		return acks, &PublishBatchError{Failed: failed}
 	}
 	return acks, nil
+}
+
+// BatchAck is the server's ack for PublishJSAtomicBatch.
+type BatchAck struct {
+	Stream string
+	// Sequence is the stream sequence of the last message of the batch.
+	Sequence uint64
+	Domain   string
+	// Value is the counter value, set only on a stream with AllowMsgCounter.
+	Value     string
+	BatchID   string
+	BatchSize uint64
+}
+
+// PublishJSAtomicBatch publishes msgs to JetStream so that the server stores
+// all of them or none. It needs nats-server 2.12 or later, and every message
+// must belong to one stream that has AllowAtomicPublish; otherwise the call
+// fails and nothing is stored. Use PublishJSBatch when you do not need
+// all-or-nothing.
+//
+// Each message is built like PublishJS builds it and runs through the
+// PublishMiddleware before the batch is sent: a middleware span ends before
+// the batch is actually published and does not see its outcome. It returns
+// when the server has committed or rejected the batch; if ctx expires while
+// the commit is in flight, the outcome is unknown. WithExpectLastSeq only makes
+// sense on the first message: the server checks it once, when the batch starts.
+func (a *App) PublishJSAtomicBatch(ctx context.Context, msgs []BatchMsg) (*BatchAck, error) {
+	if !a.pubOpen.Load() {
+		return nil, ErrNotRunning
+	}
+	if len(msgs) == 0 {
+		return nil, errors.New("nats: atomic batch: empty")
+	}
+	built := make([]*RawMsg, len(msgs))
+	for i, bm := range msgs {
+		m, err := a.Message(bm.Subject, bm.Data, bm.Opts...)
+		if err != nil {
+			return nil, fmt.Errorf("nats: atomic batch: message %d: %w", i, err)
+		}
+		built[i] = m
+	}
+	collected := make([]*RawMsg, 0, len(msgs))
+	for i, m := range built {
+		sent := false
+		collect := func(_ context.Context, m *RawMsg) error {
+			if m.Header == nil {
+				m.Header = Header{}
+			}
+			collected = append(collected, m)
+			sent = true
+			return nil
+		}
+		if err := a.WrapPublish(collect)(ctx, m); err != nil {
+			return nil, fmt.Errorf("nats: atomic batch: message %d: %w", i, err)
+		}
+		if !sent {
+			return nil, fmt.Errorf("nats: atomic batch: message %d: a publish middleware did not call next", i)
+		}
+	}
+	ack, err := jetstreamext.PublishMsgBatch(ctx, a.js, collected)
+	if err != nil {
+		return nil, fmt.Errorf("nats: atomic batch: %w", err)
+	}
+	return &BatchAck{
+		Stream: ack.Stream, Sequence: ack.Sequence, Domain: ack.Domain,
+		Value: ack.Value, BatchID: ack.BatchID, BatchSize: ack.BatchSize,
+	}, nil
 }

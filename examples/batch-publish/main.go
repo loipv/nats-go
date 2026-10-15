@@ -1,5 +1,5 @@
 // Command batch-publish publishes several messages in one call. PublishJSBatch
-// is not atomic: each message is acked on its own. atomicbatch.Publish stores
+// is not atomic: each message is acked on its own. PublishJSAtomicBatch stores
 // the whole batch or nothing: a batch with one subject outside the stream
 // fails and leaves the stream unchanged. Atomic batches need nats-server 2.12
 // or later and a stream with AllowAtomicPublish.
@@ -17,7 +17,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/loipv/nats-go/nats"
-	"github.com/loipv/nats-go/nats/atomicbatch"
 )
 
 type Item struct {
@@ -66,7 +65,7 @@ func main() {
 	for i := range ok {
 		ok[i] = nats.BatchMsg{Subject: "batchdemo.atomic", Data: Item{N: i}}
 	}
-	ack, err := atomicbatch.Publish(ctx, app, ok)
+	ack, err := app.PublishJSAtomicBatch(ctx, ok)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,7 +78,7 @@ func main() {
 		{Subject: "elsewhere.atomic", Data: Item{N: 101}},
 		{Subject: "batchdemo.atomic", Data: Item{N: 102}},
 	}
-	if _, err := atomicbatch.Publish(ctx, app, bad); err != nil {
+	if _, err := app.PublishJSAtomicBatch(ctx, bad); err != nil {
 		fmt.Println("atomic batch with a foreign subject failed:", err)
 	}
 	fmt.Println("messages in the stream after the failed batch:", count(ctx, stream))

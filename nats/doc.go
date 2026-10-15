@@ -217,13 +217,12 @@
 // a send stalls for up to 200ms and then fails with
 // jetstream.ErrTooManyStalledMsgs (definitely not stored), and an ack that
 // never arrives fails with jetstream.ErrAsyncPublishTimeout after 30s. Split
-// bigger batches. For all-or-nothing publishing see the atomicbatch package.
+// bigger batches. App.PublishJSAtomicBatch publishes a batch that the server
+// stores completely or not at all (nats-server 2.12 or later, and a stream
+// with AllowAtomicPublish).
 //
-// Three subpackages hold the integrations with extra dependencies, so this
-// package imports none of them:
+// Two subpackages hold the integrations, so this package imports neither:
 //
-//   - atomicbatch publishes a batch that the server stores completely or not
-//     at all (nats-server 2.12 or later, stream with AllowAtomicPublish).
 //   - natsotel adds OpenTelemetry tracing and metrics as middleware.
 //   - cloudevents publishes and handles CloudEvents v1.0 events.
 //

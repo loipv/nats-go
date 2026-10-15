@@ -19,9 +19,9 @@ A Go framework for building [NATS](https://nats.io) and JetStream services on to
 go get github.com/loipv/nats-go
 ```
 
-Requires Go 1.26+ and nats-server 2.10+. `KVStore` requires nats-server 2.11+, and atomic batch publishing (`atomicbatch`) requires 2.12+ and a stream with `AllowAtomicPublish`.
+Requires Go 1.26+ and nats-server 2.10+. `KVStore` requires nats-server 2.11+, and atomic batch publishing (`PublishJSAtomicBatch`) requires 2.12+ and a stream with `AllowAtomicPublish`.
 
-The core `nats` package has no dependency beyond nats.go. OpenTelemetry (`natsotel`) and atomic batches (`atomicbatch`) live in subpackages, so you only pull in their dependencies when you import them.
+The core `nats` package depends only on nats.go and orbit.go's small `jetstreamext` (for atomic batches). OpenTelemetry (`natsotel`) lives in a subpackage, so you only pull in its dependencies when you import it.
 
 ## Quick start
 
@@ -92,7 +92,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [micro-service](examples/micro-service) | `Service`, `Group` and `Endpoint`; found by `nats micro info inventory` |
 | [otel](examples/otel) | `natsotel` middleware: producer and consumer spans in one trace, printed to stdout |
 | [cloudevents](examples/cloudevents) | `cloudevents.New`, `Handle` and `Publish` with an extension |
-| [batch-publish](examples/batch-publish) | `PublishJSBatch`, and `atomicbatch.Publish` rolling back a batch with a foreign subject |
+| [batch-publish](examples/batch-publish) | `PublishJSBatch`, and `PublishJSAtomicBatch` rolling back a batch with a foreign subject |
 
 ## How handler errors are handled
 
@@ -202,12 +202,10 @@ if errors.As(err, &be) {
 
 `PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the bare context error means the outcome is unknown: the message may have been stored. Once `ctx` is cancelled or expires no further message is sent, and those entries read `nats: batch message N not sent: ...`. A message that cannot be encoded fails the whole call before anything is sent. Beyond about 4000 unacknowledged messages in flight a send stalls for up to 200ms and then fails with `jetstream.ErrTooManyStalledMsgs` (definitely not stored), so split bigger batches; an ack that never arrives fails with `jetstream.ErrAsyncPublishTimeout` after 30s. Storage order is not strictly guaranteed: jetstream resends a message after a no-responders reply, which can land it behind later ones.
 
-For all-or-nothing publishing use `atomicbatch`:
+For all-or-nothing publishing use `PublishJSAtomicBatch`:
 
 ```go
-import "github.com/loipv/nats-go/nats/atomicbatch"
-
-ack, err := atomicbatch.Publish(ctx, app, []nats.BatchMsg{
+ack, err := app.PublishJSAtomicBatch(ctx, []nats.BatchMsg{
 	{Subject: "orders.created", Data: order},
 	{Subject: "orders.items", Data: items},
 })
