@@ -165,3 +165,45 @@ func TestIdempotentLogsToAppLogger(t *testing.T) {
 	waitFor(t, func() bool { return calls.Load() == 1 && pendingAcks(t, a, "billing") == 0 })
 	waitFor(t, func() bool { return strings.Contains(buf.String(), "idempotency complete failed") })
 }
+
+func TestIdempotentManualAckAcksDuplicate(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	a.Use(Idempotent(NewMemoryStore(), IdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
+	var calls atomic.Int32
+	Consume(a, "ORDERS", "billing", func(_ context.Context, m *Msg[order]) error { calls.Add(1); return m.Ack() }, ManualAck())
+	start(t, a)
+	h := Header{"X-Order-Id": []string{"same"}}
+	_, _ = a.PublishJS(context.Background(), "orders.a", order{ID: "1"}, WithHeader(h))
+	_, _ = a.PublishJS(context.Background(), "orders.b", order{ID: "1"}, WithHeader(h))
+	waitFor(t, func() bool { return pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 2 })
+	time.Sleep(700 * time.Millisecond) // past AckWait: an unacked duplicate would be redelivered
+	if calls.Load() != 1 || delivered(t, a, "billing") != 2 {
+		t.Fatal(calls.Load(), delivered(t, a, "billing"))
+	}
+}
+
+func TestIdempotentReplyDuplicateSkipsDLQ(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupDLQ(t, a)
+	a.Use(Idempotent(NewMemoryStore()))
+	Reply(a, "once", func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil }, DLQ("dlq.once"))
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	h := Header{"Nats-Msg-Id": []string{"r-1"}}
+	if _, err := Request[int](ctx, a, "once", 1, WithHeader(h)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Request[int](ctx, a, "once", 1, WithHeader(h))
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != 400 {
+		t.Fatal(err)
+	}
+	// The DLQ publish happens before the error response, so it would be visible now.
+	if n := len(dlqMsgs(t, a)); n != 0 {
+		t.Fatal("duplicate dead-lettered", n)
+	}
+}

@@ -103,7 +103,9 @@
 // Idempotent is a middleware that skips messages whose key (by default the
 // Nats-Msg-Id header, see IdempotencyKey) was already processed. It claims the
 // key with an IdempotencyStore, runs the handler, then marks the key done, or
-// releases the claim if the handler fails or panics. NewMemoryStore is
+// releases the claim if the handler fails or panics. Duplicates are acked
+// without calling the handler (with ManualAck too), and a duplicate request
+// gets a 400; a duplicate is never retried or sent to the DLQ. NewMemoryStore is
 // correct for a single instance. NewKVStore keeps the keys in a JetStream
 // key-value bucket and is correct across instances; it needs nats-server 2.11
 // or later and rounds every TTL up to a whole second. ClaimTTL must exceed

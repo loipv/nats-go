@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"time"
@@ -73,13 +74,17 @@ func (r retryConfig) exceeded(attempt int) bool {
 }
 
 // dispose acks, naks or terms a consumed message according to the handler
-// result, publishing it to the DLQ when giving up on it. Ack failures are
-// only logged: the server redelivers the message after AckWait.
+// result, publishing it to the DLQ when giving up on it. A duplicate skipped
+// by Idempotent is acked. Ack failures are only logged: the server
+// redelivers the message after AckWait.
 func (a *App) dispose(ctx context.Context, m jetstream.Msg, raw *RawMsg, err error, rc retryConfig, src dlqSource, log *slog.Logger) {
 	attempt := src.deliveries
 	var ackErr error
 	switch {
 	case err == nil:
+		ackErr = m.Ack()
+	case errors.Is(err, ErrDuplicate):
+		log.Debug("nats: duplicate message acked", "subject", raw.Subject)
 		ackErr = m.Ack()
 	case !IsTerminal(err) && !rc.exhausted(attempt):
 		log.Error("nats: handler failed, will retry", "subject", raw.Subject, "attempt", attempt, "error", err)
@@ -122,12 +127,17 @@ func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConf
 }
 
 // handleLocal runs h with in-process retries and, when the message finally
-// fails, logs it and publishes it to the DLQ if one is set. It returns the
-// final error and whether the message was abandoned.
+// fails, logs it and publishes it to the DLQ if one is set. A duplicate
+// skipped by Idempotent is neither. It returns the final error and whether
+// the message was abandoned.
 func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *slog.Logger) (abandoned bool, err error) {
 	attempts, abandoned, err := a.retryLocal(ctx, h, m, rc, stopping, log)
 	if err == nil || abandoned {
 		return abandoned, err
+	}
+	if errors.Is(err, ErrDuplicate) {
+		log.Debug("nats: duplicate message skipped", "subject", m.Subject)
+		return false, err
 	}
 	if rc.dlq == "" {
 		log.Error("nats: handler failed", "subject", m.Subject, "attempt", attempts, "error", err)

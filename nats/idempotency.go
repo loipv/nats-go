@@ -41,9 +41,10 @@ func ClaimTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { 
 func DoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.doneTTL = d } }
 
 // Idempotent skips messages whose key was already processed successfully.
-// A duplicate is acked (nil) for JetStream and subscribe deliveries, but a
-// duplicate core request fails with Terminal(ErrDuplicate) so the requester
-// gets a 400 instead of waiting for a response that never comes.
+// It returns Terminal(ErrDuplicate) for a duplicate without calling the
+// handler. Workers recognise it: a duplicate JetStream message is acked (with
+// ManualAck too), a duplicate request gets a 400 response, and a duplicate is
+// never retried, dead-lettered or logged as a failure.
 // It panics if store is nil or a TTL is not positive.
 func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 	c := idemConfig{
@@ -65,10 +66,7 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 			}
 			if err := store.Begin(ctx, key, c.claimTTL); err != nil {
 				if errors.Is(err, ErrDuplicate) {
-					if m.Reply != "" && jsMsgFrom(ctx) == nil {
-						return Terminal(ErrDuplicate)
-					}
-					return nil
+					return Terminal(ErrDuplicate)
 				}
 				return err
 			}

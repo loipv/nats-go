@@ -129,7 +129,7 @@ app.Use(nats.Recover(), nats.Idempotent(store,
 ))
 ```
 
-A key is claimed before the handler runs and remembered once it succeeds; a duplicate is acked without running the handler. A failing or panicking handler releases the claim so the retry can run. `ClaimTTL` must exceed the worst-case handler duration, because claims are released by key without an ownership token. `KVStore` is correct across instances, needs nats-server 2.11+ and rounds every TTL up to a whole second. `MemoryStore` is only correct for a single instance. Idempotency does not apply to `ConsumeBatch`.
+A key is claimed before the handler runs and remembered once it succeeds; duplicates are acked without calling the handler, and a duplicate request gets a 400; a duplicate is never retried or sent to the DLQ. A failing or panicking handler releases the claim so the retry can run. `ClaimTTL` must exceed the worst-case handler duration, because claims are released by key without an ownership token. `KVStore` is correct across instances, needs nats-server 2.11+ and rounds every TTL up to a whole second. `MemoryStore` is only correct for a single instance. Idempotency does not apply to `ConsumeBatch`.
 
 ### Batch handlers
 

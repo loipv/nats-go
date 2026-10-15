@@ -180,7 +180,14 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			return safeCall(ctx, h, raw, log)
 		}
 		if r.cfg.manualAck {
-			if err := call(); err != nil {
+			switch err := call(); {
+			case errors.Is(err, ErrDuplicate):
+				// Idempotent skipped the handler, so nothing else acks it.
+				log.Debug("nats: duplicate message acked", "subject", raw.Subject)
+				if err := jsMsgFrom(ctx).Ack(); err != nil {
+					log.Error("nats: ack failed", "subject", raw.Subject, "error", err)
+				}
+			case err != nil:
 				log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
 			}
 			return
