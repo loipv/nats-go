@@ -192,7 +192,7 @@ func TestRequestShortCircuitMiddlewareDoesNotPanic(t *testing.T) {
 		return func(context.Context, *RawMsg) error { return nil }
 	})
 	start(t, a)
-	if _, err := Request[int](context.Background(), a, "x", 1); err == nil {
+	if _, err := a.Request(context.Background(), "x", 1, new(int)); err == nil {
 		t.Fatal("want error when no reply was produced")
 	}
 }

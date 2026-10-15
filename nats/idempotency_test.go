@@ -100,10 +100,10 @@ func TestIdempotentReplyDuplicateGets400(t *testing.T) { // Review Focus #3
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	h := Header{"Nats-Msg-Id": []string{"r-1"}}
-	if _, err := Request[int](ctx, a, "once", 1, WithHeader(h)); err != nil {
+	if _, err := a.Request(ctx, "once", 1, new(int), WithHeader(h)); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Request[int](ctx, a, "once", 1, WithHeader(h))
+	_, err := a.Request(ctx, "once", 1, new(int), WithHeader(h))
 	var se *ServiceError
 	if !errors.As(err, &se) || se.Code != 400 {
 		t.Fatal(err)
@@ -194,10 +194,10 @@ func TestIdempotentReplyDuplicateSkipsDLQ(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	h := Header{"Nats-Msg-Id": []string{"r-1"}}
-	if _, err := Request[int](ctx, a, "once", 1, WithHeader(h)); err != nil {
+	if _, err := a.Request(ctx, "once", 1, new(int), WithHeader(h)); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Request[int](ctx, a, "once", 1, WithHeader(h))
+	_, err := a.Request(ctx, "once", 1, new(int), WithHeader(h))
 	var se *ServiceError
 	if !errors.As(err, &se) || se.Code != 400 {
 		t.Fatal(err)

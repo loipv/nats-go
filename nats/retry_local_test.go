@@ -70,11 +70,12 @@ func TestReplyRetriesThenResponds(t *testing.T) {
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	r, err := Request[int](ctx, a, "flaky", 4)
-	if err != nil || r.Data != 40 {
+	var r int
+	_, err := a.Request(ctx, "flaky", 4, &r)
+	if err != nil || r != 40 {
 		t.Fatal(r, err)
 	}
-	_, err = Request[int](ctx, a, "broken", 1)
+	_, err = a.Request(ctx, "broken", 1, new(int))
 	var se *ServiceError
 	if !errors.As(err, &se) || se.Code != 500 {
 		t.Fatal(err)
@@ -135,7 +136,7 @@ func TestReplyEncodeFailureNotRetried(t *testing.T) {
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err := Request[int](ctx, a, "unencodable", 1)
+	_, err := a.Request(ctx, "unencodable", 1, new(int))
 	var se *ServiceError
 	if !errors.As(err, &se) || se.Code != 500 {
 		t.Fatal(err)

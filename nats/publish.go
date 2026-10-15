@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 
@@ -122,17 +123,25 @@ func (a *App) Publish(ctx context.Context, subject string, v any, opts ...PubOpt
 	return a.send(ctx, m, func(_ context.Context, m *RawMsg) error { return a.nc.PublishMsg(m) })
 }
 
-// Request encodes v, sends it on subject and decodes the reply into Resp.
-// The timeout comes from ctx. A reply carrying Nats-Service-Error is
-// returned as *ServiceError.
-func Request[Resp any](ctx context.Context, app *App, subject string, v any, opts ...PubOption) (*Msg[Resp], error) {
-	m, _, err := app.prepare(subject, v, opts, false)
+// Request encodes v, sends it on subject and decodes the reply into out,
+// following the json.Unmarshal convention: a nil out skips decoding, a
+// *[]byte receives the payload unchanged, and any other out must be a
+// non-nil pointer. The raw reply is returned so its headers can be read,
+// also when decoding fails. The timeout comes from ctx. A reply carrying
+// Nats-Service-Error is returned as *ServiceError.
+func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...PubOption) (*RawMsg, error) {
+	if out != nil {
+		if rv := reflect.ValueOf(out); rv.Kind() != reflect.Pointer || rv.IsNil() {
+			return nil, fmt.Errorf("nats: request %q: out must be nil or a non-nil pointer, got %T", subject, out)
+		}
+	}
+	m, _, err := a.prepare(subject, v, opts, false)
 	if err != nil {
 		return nil, err
 	}
 	var reply *RawMsg
-	err = app.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
-		r, err := app.nc.RequestMsgWithContext(ctx, m)
+	err = a.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
+		r, err := a.nc.RequestMsgWithContext(ctx, m)
 		reply = r
 		return err
 	})
@@ -146,11 +155,16 @@ func Request[Resp any](ctx context.Context, app *App, subject string, v any, opt
 		code, _ := strconv.Atoi(reply.Header.Get("Nats-Service-Error-Code"))
 		return nil, &ServiceError{Code: code, Description: desc}
 	}
-	data, err := decode[Resp](app.opts.codec, reply.Data)
-	if err != nil {
-		return nil, fmt.Errorf("nats: decode reply: %w", err)
+	switch p := out.(type) {
+	case nil:
+	case *[]byte:
+		*p = reply.Data
+	default:
+		if err := a.opts.codec.Unmarshal(reply.Data, out); err != nil {
+			return reply, fmt.Errorf("nats: decode reply: %w", err)
+		}
 	}
-	return &Msg[Resp]{Subject: reply.Subject, Header: reply.Header, Data: data, Raw: reply}, nil
+	return reply, nil
 }
 
 // PublishJS encodes v, publishes it to JetStream and waits for the stream's ack.

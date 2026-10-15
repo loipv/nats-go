@@ -3,6 +3,8 @@ package nats
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,11 +54,12 @@ func TestRequestTypedAndServiceError(t *testing.T) {
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	r, err := Request[int](ctx, a, "inc", 1)
-	if err != nil || r.Data != 2 {
+	var r int
+	_, err := a.Request(ctx, "inc", 1, &r)
+	if err != nil || r != 2 {
 		t.Fatal(r, err)
 	}
-	_, err = Request[int](ctx, a, "inc", -1)
+	_, err = a.Request(ctx, "inc", -1, new(int))
 	var se *ServiceError
 	if !errors.As(err, &se) || se.Code != 400 || se.Description != "negative" {
 		t.Fatal(err)
@@ -69,7 +72,7 @@ func TestRequestNoResponders(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	begin := time.Now()
-	_, err := Request[int](ctx, a, "nobody.home", 1)
+	_, err := a.Request(ctx, "nobody.home", 1, new(int))
 	if !errors.Is(err, natsio.ErrNoResponders) || time.Since(begin) > time.Second {
 		t.Fatal(err, time.Since(begin))
 	}
@@ -121,5 +124,78 @@ func TestHandlerCanPublishDuringShutdown(t *testing.T) {
 	}
 	if err := a.Publish(context.Background(), "x", nil); !errors.Is(err, ErrNotRunning) {
 		t.Fatal("publish after shutdown:", err)
+	}
+}
+
+func requestApp(t *testing.T) *App {
+	t.Helper()
+	a := newApp(t, runServer(t))
+	a.Reply("req.order", TypedReply(func(context.Context, *Msg[[]byte]) (map[string]string, error) {
+		return map[string]string{"ID": "1"}, nil
+	}))
+	start(t, a)
+	if _, err := a.Conn().Subscribe("req.bad", func(m *natsio.Msg) { _ = m.Respond([]byte("not json")) }); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func reqCtx(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestRequestOutNil(t *testing.T) {
+	a := requestApp(t)
+	reply, err := a.Request(reqCtx(t), "req.order", "x", nil)
+	if err != nil || string(reply.Data) != `{"ID":"1"}` {
+		t.Fatal(reply, err)
+	}
+}
+
+func TestRequestOutBytes(t *testing.T) {
+	a := requestApp(t)
+	var b []byte
+	if _, err := a.Request(reqCtx(t), "req.order", "x", &b); err != nil || string(b) != `{"ID":"1"}` {
+		t.Fatal(string(b), err)
+	}
+}
+
+func TestRequestOutStruct(t *testing.T) {
+	a := requestApp(t)
+	var inv struct{ ID string }
+	reply, err := a.Request(reqCtx(t), "req.order", "x", &inv)
+	if err != nil || inv.ID != "1" || reply.Subject == "" {
+		t.Fatal(inv, reply, err)
+	}
+}
+
+func TestRequestOutMustBePointer(t *testing.T) {
+	a := requestApp(t)
+	var n atomic.Int32
+	if _, err := a.Conn().Subscribe("req.count", func(m *natsio.Msg) { n.Add(1); _ = m.Respond(nil) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []any{struct{}{}, (*struct{})(nil)} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err := a.Request(ctx, "req.count", "x", out)
+		cancel()
+		if err == nil || !strings.Contains(err.Error(), "non-nil pointer") {
+			t.Fatalf("out %T: err = %v", out, err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n.Load() != 0 {
+		t.Fatalf("%d requests sent", n.Load())
+	}
+}
+
+func TestRequestDecodeFailureReturnsReply(t *testing.T) {
+	a := requestApp(t)
+	var inv struct{ ID string }
+	reply, err := a.Request(reqCtx(t), "req.bad", "x", &inv)
+	if err == nil || reply == nil || string(reply.Data) != "not json" {
+		t.Fatal(reply, err)
 	}
 }

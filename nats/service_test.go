@@ -67,8 +67,9 @@ func TestServiceDiscoverableAndServes(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	r, err := Request[order](ctx, a, "orders.v2.get", getReq{ID: "7"})
-	if err != nil || r.Data.ID != "v2-7" {
+	var r order
+	_, err := a.Request(ctx, "orders.v2.get", getReq{ID: "7"}, &r)
+	if err != nil || r.ID != "v2-7" {
 		t.Fatal(r, err)
 	}
 }
@@ -86,14 +87,15 @@ func TestServiceErrorsAndStats(t *testing.T) {
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if r, err := Request[int](ctx, a, "calc.div", [2]int{6, 3}); err != nil || r.Data != 2 {
+	var r int
+	if _, err := a.Request(ctx, "calc.div", [2]int{6, 3}, &r); err != nil || r != 2 {
 		t.Fatal(r, err)
 	}
 	var se *ServiceError
-	if _, err := Request[int](ctx, a, "calc.div", [2]int{1, 0}); !errors.As(err, &se) || se.Code != 500 || se.Description != "division by zero" {
+	if _, err := a.Request(ctx, "calc.div", [2]int{1, 0}, new(int)); !errors.As(err, &se) || se.Code != 500 || se.Description != "division by zero" {
 		t.Fatal(err)
 	}
-	if _, err := Request[int](ctx, a, "calc.div", "not-an-array"); !errors.As(err, &se) || se.Code != 400 {
+	if _, err := a.Request(ctx, "calc.div", "not-an-array", new(int)); !errors.As(err, &se) || se.Code != 400 {
 		t.Fatal(err)
 	}
 	st := ctlRequest[micro.Stats](t, a, micro.StatsVerb, "calc")
@@ -113,7 +115,7 @@ func TestServiceRetryAndDLQ(t *testing.T) {
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, _ = Request[int](ctx, a, "flaky.do", 1)
+	_, _ = a.Request(ctx, "flaky.do", 1, new(int))
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) == 1 })
 	if calls.Load() != 2 {
 		t.Fatal(calls.Load())
@@ -169,7 +171,7 @@ func TestServiceShutdownDuringRequest(t *testing.T) { // Review Focus #1
 	go func() {
 		ctx, c := context.WithTimeout(context.Background(), 3*time.Second)
 		defer c()
-		_, _ = Request[int](ctx, a, "slow.do", 1)
+		_, _ = a.Request(ctx, "slow.do", 1, new(int))
 	}()
 	<-started
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

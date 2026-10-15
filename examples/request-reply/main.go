@@ -40,13 +40,13 @@ func main() {
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	resp, err := nats.Request[int](reqCtx, app, "math.double", 21)
-	if err != nil {
+	var doubled int
+	if _, err := app.Request(reqCtx, "math.double", 21, &doubled); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("double(21) =", resp.Data)
+	fmt.Println("double(21) =", doubled)
 
-	_, err = nats.Request[int](reqCtx, app, "math.double", -1)
+	_, err = app.Request(reqCtx, "math.double", -1, new(int))
 	var se *nats.ServiceError
 	if errors.As(err, &se) {
 		fmt.Printf("double(-1) failed: code %d: %s\n", se.Code, se.Description)
