@@ -27,9 +27,9 @@ func (e *BatchError) Error() string {
 }
 
 // ConsumeBatch registers h on an existing durable pull consumer (or one
-// declared with App.Consumer), passing it up to BatchSize messages at a
+// declared with App.Consumer), passing it up to WithBatchSize messages at a
 // time. Messages that fail to decode or validate, or that were delivered
-// more than MaxAttempts times, are settled without reaching h. With
+// more than WithMaxAttempts times, are settled without reaching h. With
 // automatic ack a nil error acks the whole batch, a *BatchError settles
 // only the listed messages as failed, and any other error fails every
 // message. Middleware does not apply to batch handlers.
@@ -120,7 +120,7 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *sl
 	}
 }
 
-// fetch waits up to BatchWait for up to BatchSize messages.
+// fetch waits up to WithBatchWait for up to WithBatchSize messages.
 func (r *batchReg[T]) fetch(ctx context.Context) ([]jetstream.Msg, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.batchWait)
 	defer cancel()
@@ -138,7 +138,7 @@ func (r *batchReg[T]) fetch(ctx context.Context) ([]jetstream.Msg, error) {
 	return msgs, nil
 }
 
-// handle drops messages past MaxAttempts or failing to decode, calls fn on
+// handle drops messages past WithMaxAttempts or failing to decode, calls fn on
 // the rest and settles them by its result.
 func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *slog.Logger) {
 	ctx := withLogger(a.baseCtx, log)

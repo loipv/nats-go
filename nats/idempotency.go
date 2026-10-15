@@ -43,7 +43,7 @@ func WithDoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig)
 // Idempotent skips messages whose key was already processed successfully.
 // It returns Terminal(ErrDuplicate) for a duplicate without calling the
 // handler. Workers recognise it: a duplicate JetStream message is acked (with
-// ManualAck too), a duplicate request gets a 400 response, and a duplicate is
+// WithManualAck too), a duplicate request gets a 400 response, and a duplicate is
 // never retried, dead-lettered or logged as a failure.
 // It panics if store is nil or a TTL is not positive.
 func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {

@@ -6,7 +6,7 @@
 // underlying connection available through App.Conn and App.JetStream.
 //
 // This package shares its name with nats.go. Common connection, auth and TLS
-// options are re-exported (UserCredentials, Token, RootCAs, ClientCert, ...)
+// options are re-exported (WithUserCredentials, WithToken, WithRootCAs, WithClientCert, ...)
 // so most programs never import nats.go directly. For anything else, import
 // nats.go under an alias and use WithNATSOptions.
 //
@@ -50,12 +50,12 @@
 //
 // The registration methods:
 //
-//   - Subscribe handles core NATS messages, with wildcards and Queue groups.
+//   - Subscribe handles core NATS messages, with wildcards and queue groups (WithQueue).
 //   - Reply answers requests; the returned value is encoded and sent back.
 //   - Consume handles a durable JetStream consumer; pull and push consumers
 //     are detected at Start.
 //   - ConsumeOrdered reads a stream in order through an ephemeral ordered
-//     consumer; it accepts only Concurrency(1) so order is kept.
+//     consumer; it accepts only WithConcurrency(1) so order is kept.
 //
 // The error a handler returns decides what happens to the message:
 //
@@ -66,20 +66,20 @@
 //
 // Retries, the last attempt and the DLQ are covered under Reliability.
 //
-// With ManualAck the handler acks itself through Msg.Ack, Nak, NakWithDelay,
+// Using WithManualAck, the handler acks itself through Msg.Ack, Nak, NakWithDelay,
 // Term and InProgress, and the returned error is only logged.
 //
 // # Reliability
 //
 // Failed messages are retried with a backoff and, when they run out of
-// attempts, sent to a dead-letter queue. MaxAttempts, WithBackoff and DLQ
+// attempts, sent to a dead-letter queue. WithMaxAttempts, WithBackoff and WithDLQ
 // configure this for every kind of handler; they cannot be combined with
-// ManualAck. Msg.Attempt returns the current attempt, starting at 1.
+// WithManualAck. Msg.Attempt returns the current attempt, starting at 1.
 //
 // For Consume and ConsumeBatch the server redelivers: a failed message is
 // naked with a delay from the backoff, by default ExponentialBackoff(1s, 1m),
 // and retried without limit. For Subscribe, Reply and ConsumeOrdered there is
-// no redelivery, so a failed message is not retried unless MaxAttempts is set;
+// no redelivery, so a failed message is not retried unless WithMaxAttempts is set;
 // the library then retries in the worker, waiting for the backoff between
 // attempts. Unlimited is allowed but can stall the subscription while
 // failures last, Reply must finish its retries within the requester's timeout,
@@ -94,7 +94,7 @@
 //	error, attempts left                          NakWithDelay        NakWithDelay
 //	error, last attempt                           log, Term           publish to DLQ, Term
 //	Terminal(err), decode or validation failure   Term                publish to DLQ, Term
-//	delivered more than MaxAttempts times         Term, no handler    publish to DLQ, Term, no handler
+//	delivered more than WithMaxAttempts times     Term, no handler    publish to DLQ, Term, no handler
 //	DLQ publish fails                             -                   log, NakWithDelay
 //
 // A panic in a handler is recovered by the worker and handled like any other
@@ -108,28 +108,28 @@
 // JetStream consumers, Nats-DLQ-Stream, Nats-DLQ-Consumer, Nats-DLQ-Sequence
 // and Nats-DLQ-Msg-Id (the original Nats-Msg-Id). Publishing the same message
 // again does not create a duplicate within the DLQ stream's Duplicates window.
-// For Consume and ConsumeBatch with a finite MaxAttempts, the consumer's
-// MaxDeliver must be -1 or greater than MaxAttempts, or Start fails.
+// For Consume and ConsumeBatch with a finite WithMaxAttempts, the consumer's
+// MaxDeliver must be -1 or greater than WithMaxAttempts, or Start fails.
 //
-// AutoInProgress sends in-progress signals every AckWait/2 while a Consume or
+// WithAutoInProgress sends in-progress signals every AckWait/2 while a Consume or
 // ConsumeBatch handler runs, so a slow handler is not redelivered; combine it
-// with Timeout.
+// with WithTimeout.
 //
 // Idempotent is a middleware that skips messages whose key (by default the
-// Nats-Msg-Id header, see IdempotencyKey) was already processed. It claims the
+// Nats-Msg-Id header, see WithIdempotencyKey) was already processed. It claims the
 // key with an IdempotencyStore, runs the handler, then marks the key done, or
 // releases the claim if the handler fails or panics. Duplicates are acked
-// without calling the handler (with ManualAck too), and a duplicate request
+// without calling the handler (with WithManualAck too), and a duplicate request
 // gets a 400; a duplicate is never retried or sent to the DLQ.
 // NewMemoryStore is correct for a single instance. NewKVStore keeps the keys in a JetStream
 // key-value bucket and is correct across instances; it needs nats-server 2.11
-// or later and rounds every TTL up to a whole second. ClaimTTL must exceed
+// or later and rounds every TTL up to a whole second. WithClaimTTL must exceed
 // the worst-case handler duration, because claims are released by key and
 // carry no owner. Register it after Recover:
 //
 //	app.Use(nats.Recover(), nats.Idempotent(nats.NewKVStore(app, "IDEMPOTENCY")))
 //
-// ConsumeBatch passes up to BatchSize messages (waiting at most BatchWait) to
+// ConsumeBatch passes up to WithBatchSize messages (waiting at most WithBatchWait) to
 // one call on a pull consumer. Return nil to ack them all, a *BatchError to
 // fail only the listed indexes, or any other error to fail them all. Failed
 // messages follow the table above. Middleware does not apply to batches, and
@@ -159,7 +159,7 @@
 //
 // App.Publish sends fire-and-forget, App.Request waits for a reply and
 // decodes it into out (a failed responder comes back as *ServiceError) and
-// App.PublishJS waits for the stream's ack, with MsgID for deduplication.
+// App.PublishJS waits for the stream's ack, with WithMsgID for deduplication.
 //
 //	var inv Invoice
 //	_, err := app.Request(ctx, "billing.get", GetInvoice{ID: "42"}, &inv)
@@ -176,15 +176,15 @@
 // Endpoint adds typed endpoints to it, or to a Group of it, and works like
 // Reply: the returned value is encoded and sent back, and an error becomes a
 // micro service error (code 400 for Terminal, 500 otherwise) that the service
-// STATS count. The Timeout, With, MaxAttempts, WithBackoff and DLQ options
-// apply; EndpointSubject and EndpointMetadata are specific to endpoints.
+// STATS count. The WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff and WithDLQ options
+// apply; WithEndpointSubject and WithEndpointMetadata are specific to endpoints.
 //
 //	svc := app.Service(micro.Config{Name: "inventory", Version: "1.0.0"})
 //	svc.Group("inventory").Endpoint("get", nats.TypedReply(getStock)) // subject inventory.get
 //
 // An endpoint handles one request at a time per instance, in micro's
 // goroutine; scale with more instances, which share a queue group.
-// MaxAttempts, WithBackoff and Unlimited stall the endpoint while a request
+// WithMaxAttempts, WithBackoff and Unlimited stall the endpoint while a request
 // is retried, and the whole retry time must fit the requester's timeout. On
 // Shutdown the requests already delivered are drained and answered, but a
 // handler that publishes through the App then fails, because publishing is

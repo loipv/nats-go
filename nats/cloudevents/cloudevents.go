@@ -22,7 +22,8 @@ type Emitter struct {
 type Option func(*Emitter)
 
 // WithSubjectFunc maps an event type to the NATS subject it is published on and
-// handled from. The default is "events." + eventType.
+// handled from. The default is "events." + eventType. It is unrelated to
+// WithSubject, which sets the CloudEvents subject attribute (ce-subject).
 func WithSubjectFunc(fn func(eventType string) string) Option {
 	return func(e *Emitter) { e.subjectFor = fn }
 }
@@ -57,7 +58,8 @@ type publishOptions struct {
 // WithID sets ce-id. The default is a random UUID v4.
 func WithID(id string) PublishOption { return func(o *publishOptions) { o.id = id } }
 
-// WithSubject sets ce-subject.
+// WithSubject sets the CloudEvents subject attribute (ce-subject). It does not
+// change the NATS subject; see WithSubjectFunc for that.
 func WithSubject(s string) PublishOption { return func(o *publishOptions) { o.subject = s } }
 
 // WithTime sets ce-time. The default is the time of the publish.
@@ -208,7 +210,7 @@ func Typed[T any](fn func(context.Context, Event, *nats.Msg[T]) error) EventHand
 
 // Handle subscribes h to the events of eventType. A message with invalid
 // attributes fails with nats.Terminal without calling the handler, so the
-// core logs it and, with a DLQ option, dead-letters it. CloudEvents are
+// core logs it and, with a WithDLQ option, dead-letters it. CloudEvents are
 // one-way: Handle never replies; use App.Reply for request/reply.
 // An empty eventType, or one that Subject maps to "", is a registration error
 // that Start returns.

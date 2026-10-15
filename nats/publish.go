@@ -80,7 +80,7 @@ func (a *App) build(subject string, v any, opts []PubOption) (*RawMsg, pubConfig
 
 // Message builds the message Publish or PublishJS would send, without sending
 // it: v encoded by the codec, the headers from opts, and the JetStream options
-// (MsgID, ExpectStream, ExpectLastSeq, ExpectLastSubjectSeq) as headers. It
+// (WithMsgID, WithExpectStream, WithExpectLastSeq, WithExpectLastSubjectSeq) as headers. It
 // needs no connection and is meant for integrations such as atomic batches.
 func (a *App) Message(subject string, v any, opts ...PubOption) (*RawMsg, error) {
 	m, _, err := a.build(subject, v, opts)

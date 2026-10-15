@@ -72,15 +72,15 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 }
 
 // Endpoint registers h as a micro endpoint of the service. The subject is the
-// group prefixes followed by EndpointSubject, or name if unset. Requests are
+// group prefixes followed by WithEndpointSubject, or name if unset. Requests are
 // handled like Reply: the returned value is encoded and sent back, and an
 // error is sent as a micro service error (code 400 for Terminal errors, 500
 // otherwise), counted in the service STATS. On Shutdown, requests already
 // delivered to the endpoint are still handled and answered, within the
 // Shutdown deadline.
 //
-// Options allowed: Timeout, With, MaxAttempts, WithBackoff, DLQ,
-// EndpointSubject and EndpointMetadata. MaxAttempts defaults to 1.
+// Options allowed: WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff, WithDLQ,
+// WithEndpointSubject and WithEndpointMetadata. WithMaxAttempts defaults to 1.
 func (s *ServiceRef) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
 	s.addEndpoint(nil, name, h, opts)
 }

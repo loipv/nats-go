@@ -27,7 +27,7 @@ type Msg[T any] struct {
 
 // Attempt returns the 1-based attempt of the message: the JetStream delivery
 // count for Consume, or the in-process attempt number for handlers retried
-// by MaxAttempts, 1 otherwise.
+// by WithMaxAttempts, 1 otherwise.
 func (m *Msg[T]) Attempt() int { return m.attempt }
 
 func (m *Msg[T]) jsMsg() (jetstream.Msg, error) {
@@ -37,7 +37,7 @@ func (m *Msg[T]) jsMsg() (jetstream.Msg, error) {
 	return m.js, nil
 }
 
-// Ack acknowledges a JetStream message. Use it with ManualAck.
+// Ack acknowledges a JetStream message. Use it with WithManualAck.
 func (m *Msg[T]) Ack() error {
 	js, err := m.jsMsg()
 	if err != nil {
@@ -107,7 +107,7 @@ type handlerConfig struct {
 	pullMax     int
 	filters     []string
 	deliver     *jetstream.DeliverPolicy
-	// maxAttempts is 0 until MaxAttempts sets it; retry resolves the default.
+	// maxAttempts is 0 until WithMaxAttempts sets it; retry resolves the default.
 	maxAttempts    int
 	backoff        Backoff
 	dlq            string

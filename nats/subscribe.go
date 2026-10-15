@@ -12,10 +12,10 @@ import (
 )
 
 // Subscribe registers h for messages on subject. Wildcards (* and >) and
-// Queue are supported. Errors returned by the handler are logged.
+// WithQueue are supported. Errors returned by the handler are logged.
 //
 // Core NATS never redelivers, so a failed message is not retried by default.
-// MaxAttempts, WithBackoff and DLQ retry it in the worker, waiting for the
+// WithMaxAttempts, WithBackoff and WithDLQ retry it in the worker, waiting for the
 // backoff between attempts and keeping the worker busy meanwhile. Unlimited
 // can stall the subscription while failures last: with every worker retrying,
 // pending messages pile up and nats.go may report a slow consumer.
@@ -28,8 +28,8 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.
 //
-// A failed request is not retried by default. MaxAttempts, WithBackoff and
-// DLQ retry it in the worker, and the response is sent after the retries
+// A failed request is not retried by default. WithMaxAttempts, WithBackoff and
+// WithDLQ retry it in the worker, and the response is sent after the retries
 // finish, so the total retry time must fit within the requester's timeout.
 // Unlimited can stall the subscription while failures last.
 func (a *App) Reply(subject string, h ReplyHandler, opts ...HandlerOption) {

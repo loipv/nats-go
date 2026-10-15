@@ -12,7 +12,7 @@ import (
 // Consume registers h on an existing durable consumer (or one declared with
 // App.Consumer). Pull and push consumers are detected at Start. With
 // automatic ack (the default) a nil error acks; any other error naks the
-// message with a backoff delay until MaxAttempts is used up. A Terminal
+// message with a backoff delay until WithMaxAttempts is used up. A Terminal
 // error, or the last failed attempt, terms the message after publishing it
 // to the DLQ if one is set.
 //
@@ -40,8 +40,8 @@ func (a *App) Consume(stream, consumer string, h MsgHandler, opts ...HandlerOpti
 // ConsumeOrdered registers h on an ephemeral ordered consumer of stream.
 // Messages arrive in stream order and are never acked.
 //
-// A failed message is not retried by default. MaxAttempts, WithBackoff and
-// DLQ retry it in process; the whole stream waits while a message is retried,
+// A failed message is not retried by default. WithMaxAttempts, WithBackoff and
+// WithDLQ retry it in process; the whole stream waits while a message is retried,
 // which keeps the order. Unlimited can stall the stream while failures last.
 func (a *App) ConsumeOrdered(stream string, h MsgHandler, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindOrdered, opts)
@@ -200,7 +200,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		}
 		m := jsMsgFrom(ctx)
 		src := r.source(m)
-		// A message redelivered past MaxAttempts (say, after AckWait expired
+		// A message redelivered past WithMaxAttempts (say, after AckWait expired
 		// on a slow handler) is given up on without running the handler.
 		err := errMaxAttempts
 		if !rc.exceeded(src.deliveries) {

@@ -13,7 +13,7 @@ import (
 // Backoff returns the delay before the given retry attempt (1-based).
 type Backoff func(attempt int) time.Duration
 
-// Unlimited as MaxAttempts retries a message until it succeeds.
+// Unlimited as WithMaxAttempts retries a message until it succeeds.
 const Unlimited = -1
 
 // ExponentialBackoff doubles the delay from min on every attempt up to max,

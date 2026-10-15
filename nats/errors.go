@@ -19,7 +19,7 @@ var (
 	ErrInProgress = errors.New("nats: message in progress elsewhere")
 )
 
-// errMaxAttempts is the DLQ cause of a message redelivered past MaxAttempts.
+// errMaxAttempts is the DLQ cause of a message redelivered past WithMaxAttempts.
 var errMaxAttempts = errors.New("nats: max attempts exceeded")
 
 type terminalError struct{ err error }
