@@ -95,7 +95,7 @@ const (
 	kindEndpoint  handlerKind = "endpoint"
 )
 
-// HandlerOption configures a handler registered with Subscribe, Reply,
+// HandlerOption configures a handler registered with Subscribe, SubscribeReply,
 // Consume, ConsumeOrdered, a batch consumer or Endpoint. Using an option on a
 // handler kind it does not apply to is a registration error returned by Start.
 type HandlerOption func(*handlerConfig)
@@ -308,11 +308,11 @@ func Typed[T any](fn func(context.Context, *Msg[T]) error) MsgHandler {
 	return MsgHandler{bind: func(c Codec) Handler { return typed(c, fn) }}
 }
 
-// ReplyHandler is a typed responder for App.Reply and service endpoints.
+// ReplyHandler is a typed responder for App.SubscribeReply and service endpoints.
 // Create it with TypedReply; the zero value is rejected by Start.
 type ReplyHandler struct{ bind func(Codec) Handler }
 
-// TypedReply wraps fn for App.Reply and service endpoints. The request is
+// TypedReply wraps fn for App.SubscribeReply and service endpoints. The request is
 // decoded into Req and the returned Resp is encoded with the app codec.
 func TypedReply[Req, Resp any](fn func(context.Context, *Msg[Req]) (Resp, error)) ReplyHandler {
 	if fn == nil {
@@ -435,7 +435,7 @@ func loggerFrom(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// panicError is the error a recovered handler panic becomes. Reply and
+// panicError is the error a recovered handler panic becomes. SubscribeReply and
 // endpoint requesters see "internal error" instead of its text, which may
 // leak internals.
 type panicError struct {

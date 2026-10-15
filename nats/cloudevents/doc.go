@@ -14,7 +14,7 @@
 // PublishJS sends to a stream and uses the event id as Nats-Msg-Id, so the
 // stream drops a repeated id within its Duplicates window.
 //
-// Handle is one-way: it never replies to a request. Use App.Reply for
+// Handle is one-way: it never replies to a request. Use App.SubscribeReply for
 // request/reply. A message whose attributes are invalid (missing ce-id,
 // ce-source, ce-type or ce-specversion, an unsupported spec version or a bad
 // ce-time) fails with nats.Terminal and the handler is not called; with the WithDLQ option

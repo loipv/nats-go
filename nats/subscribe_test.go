@@ -47,7 +47,7 @@ func TestSubscribeQueueGroupDeliversOnce(t *testing.T) {
 func TestReplyRespondsAndMapsErrors(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
-	a.Reply("math.double", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
+	a.SubscribeReply("math.double", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Data < 0 {
 			return 0, Terminal(errors.New("negative"))
 		}
@@ -103,8 +103,8 @@ func TestInvalidSubjectFailsStart(t *testing.T) {
 func TestPanicSendsInternalError(t *testing.T) {
 	boom := TypedReply(func(context.Context, *Msg[int]) (int, error) { panic("kaboom") })
 	for name, register := range map[string]func(*App){
-		"reply with Recover": func(a *App) { a.Use(Recover()); a.Reply("boom", boom) },
-		"reply":              func(a *App) { a.Reply("boom", boom) },
+		"reply with Recover": func(a *App) { a.Use(Recover()); a.SubscribeReply("boom", boom) },
+		"reply":              func(a *App) { a.SubscribeReply("boom", boom) },
 		"endpoint":           func(a *App) { a.Service(micro.Config{Name: "svc", Version: "1.0.0"}).Endpoint("boom", boom) },
 		"endpoint with Recover": func(a *App) {
 			a.Use(Recover())

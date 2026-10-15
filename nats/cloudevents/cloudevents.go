@@ -211,7 +211,7 @@ func Typed[T any](fn func(context.Context, Event, *nats.Msg[T]) error) EventHand
 // Handle subscribes h to the events of eventType. A message with invalid
 // attributes fails with nats.Terminal without calling the handler, so the
 // core logs it and, with a WithDLQ option, dead-letters it. CloudEvents are
-// one-way: Handle never replies; use App.Reply for request/reply.
+// one-way: Handle never replies; use App.SubscribeReply for request/reply.
 // An empty eventType, or one that Subject maps to "", is a registration error
 // that Start returns.
 func (e *Emitter) Handle(eventType string, h EventHandler, opts ...nats.HandlerOption) {

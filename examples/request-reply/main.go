@@ -1,4 +1,4 @@
-// Command request-reply shows Reply and Request with typed payloads and
+// Command request-reply shows SubscribeReply and Request with typed payloads and
 // error propagation through ServiceError.
 //
 //	nats-server -js &
@@ -22,7 +22,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	app.Reply("math.double", nats.TypedReply(func(_ context.Context, m *nats.Msg[int]) (int, error) {
+	app.SubscribeReply("math.double", nats.TypedReply(func(_ context.Context, m *nats.Msg[int]) (int, error) {
 		if m.Data < 0 {
 			// Terminal errors reach the caller with code 400, others with 500.
 			return 0, nats.Terminal(errors.New("negative input"))

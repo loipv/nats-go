@@ -15,8 +15,8 @@ func TestNilHandlerIsRegistrationError(t *testing.T) {
 	cases := map[string]func(a *App){
 		"subscribe zero":  func(a *App) { a.Subscribe("x", MsgHandler{}) },
 		"subscribe nilfn": func(a *App) { a.Subscribe("x", Typed(nilFn)) },
-		"reply zero":      func(a *App) { a.Reply("x", ReplyHandler{}) },
-		"reply nilfn":     func(a *App) { a.Reply("x", TypedReply(nilReplyFn)) },
+		"reply zero":      func(a *App) { a.SubscribeReply("x", ReplyHandler{}) },
+		"reply nilfn":     func(a *App) { a.SubscribeReply("x", TypedReply(nilReplyFn)) },
 		"consume zero":    func(a *App) { a.Consume("ORDERS", "billing", MsgHandler{}) },
 		"ordered zero":    func(a *App) { a.ConsumeOrdered("ORDERS", MsgHandler{}) },
 		"batch zero":      func(a *App) { a.ConsumeBatch("ORDERS", "billing", BatchHandler{}) },

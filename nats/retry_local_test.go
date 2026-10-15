@@ -60,13 +60,13 @@ func TestReplyRetriesThenResponds(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	setupDLQ(t, a)
-	a.Reply("flaky", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
+	a.SubscribeReply("flaky", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Attempt() < 2 {
 			return 0, errors.New("flaky")
 		}
 		return m.Data * 10, nil
 	}), WithMaxAttempts(2), fast)
-	a.Reply("broken", TypedReply(func(context.Context, *Msg[int]) (int, error) { return 0, errors.New("broken") }), WithMaxAttempts(2), fast, WithDLQ("dlq.reply"))
+	a.SubscribeReply("broken", TypedReply(func(context.Context, *Msg[int]) (int, error) { return 0, errors.New("broken") }), WithMaxAttempts(2), fast, WithDLQ("dlq.reply"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -129,7 +129,7 @@ func TestReplyEncodeFailureNotRetried(t *testing.T) {
 	setupDLQ(t, a)
 	var calls atomic.Int32
 	type bad struct{ F func() }
-	a.Reply("unencodable", TypedReply(func(context.Context, *Msg[int]) (bad, error) {
+	a.SubscribeReply("unencodable", TypedReply(func(context.Context, *Msg[int]) (bad, error) {
 		calls.Add(1)
 		return bad{F: func() {}}, nil
 	}), WithMaxAttempts(3), fast, WithDLQ("dlq.reply"))

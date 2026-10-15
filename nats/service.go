@@ -73,7 +73,7 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 
 // Endpoint registers h as a micro endpoint of the service. The subject is the
 // group prefixes followed by WithEndpointSubject, or name if unset. Requests are
-// handled like Reply: the returned value is encoded and sent back, and an
+// handled like SubscribeReply: the returned value is encoded and sent back, and an
 // error is sent as a micro service error (code 400 for Terminal errors, 500
 // otherwise; a panic is sent as "internal error" with code 500), counted in
 // the service STATS. A request without a reply subject is dropped with a Warn

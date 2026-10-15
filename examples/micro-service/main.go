@@ -1,6 +1,6 @@
 // Command micro-service runs a NATS micro service named "inventory" with two
 // endpoints, one of them in a group, until SIGINT/SIGTERM. Requests are
-// validated and answered like Reply handlers, and the service shows up in the
+// validated and answered like SubscribeReply handlers, and the service shows up in the
 // nats CLI:
 //
 //	nats-server -js &

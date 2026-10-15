@@ -20,7 +20,7 @@
 // error.
 //
 // Not covered: ConsumeBatch handlers (they have no middleware) and responses
-// sent by Reply workers or micro endpoints (they bypass PublishMiddleware).
+// sent by SubscribeReply workers or micro endpoints (they bypass PublishMiddleware).
 // The "send" span of a PublishJSBatch message ends when the message is handed
 // to the client and does not see its ack result.
 //

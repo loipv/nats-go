@@ -58,7 +58,7 @@ func main() {
 	}
 	app.Use(nats.Recover())
 
-	app.Reply("api.orders.get", nats.TypedReply(func(_ context.Context, m *nats.Msg[GetOrder]) (Order, error) {
+	app.SubscribeReply("api.orders.get", nats.TypedReply(func(_ context.Context, m *nats.Msg[GetOrder]) (Order, error) {
 		return Order{ID: m.Data.ID, Status: "shipped"}, nil
 	}), nats.WithQueue("orders-service"))
 

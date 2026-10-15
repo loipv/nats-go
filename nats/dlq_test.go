@@ -166,7 +166,7 @@ func TestStartChecks(t *testing.T) {
 			a.Subscribe("orders.*", Typed(func(context.Context, *Msg[[]byte]) error { return nil }), WithDLQ("orders.dlq"))
 		},
 		"reply DLQ matches own subject": func(a *App) {
-			a.Reply("orders.>", TypedReply(func(context.Context, *Msg[[]byte]) ([]byte, error) { return nil, nil }), WithDLQ("orders.dlq"))
+			a.SubscribeReply("orders.>", TypedReply(func(context.Context, *Msg[[]byte]) ([]byte, error) { return nil, nil }), WithDLQ("orders.dlq"))
 		},
 	}
 	for name, add := range cases {

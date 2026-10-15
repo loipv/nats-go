@@ -25,7 +25,7 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 	registerCore(a, kindSubscribe, subject, h.bind, opts)
 }
 
-// Reply registers h as the responder for requests on subject. The returned
+// SubscribeReply registers h as the responder for requests on subject. The returned
 // value is encoded and sent back. A returned error is sent back in the
 // Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
 // Terminal errors (including decode and validation failures), 500 otherwise.
@@ -36,7 +36,7 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 // WithDLQ retry it in the worker, and the response is sent after the retries
 // finish, so the total retry time must fit within the requester's timeout.
 // Unlimited can stall the subscription while failures last.
-func (a *App) Reply(subject string, h ReplyHandler, opts ...HandlerOption) {
+func (a *App) SubscribeReply(subject string, h ReplyHandler, opts ...HandlerOption) {
 	registerCore(a, kindReply, subject, h.bind, opts)
 }
 
@@ -55,7 +55,7 @@ func replyHandler[Req, Resp any](c Codec, fn func(context.Context, *Msg[Req]) (R
 	})
 }
 
-// reply carries Reply's response out of the handler chain. The worker sends
+// reply carries SubscribeReply's response out of the handler chain. The worker sends
 // it once the chain has succeeded, so a failure to encode or send the
 // response never re-runs the handler.
 type reply struct {

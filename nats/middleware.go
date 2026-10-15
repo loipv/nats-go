@@ -21,7 +21,7 @@ type PublishFunc func(ctx context.Context, m *RawMsg) error
 type PublishMiddleware func(PublishFunc) PublishFunc
 
 // Recover turns a panic in the handler into an error carrying the stack. The
-// stack stays in the error for logs; a requester of Reply or an endpoint only
+// stack stays in the error for logs; a requester of SubscribeReply or an endpoint only
 // receives "internal error".
 func Recover() Middleware {
 	return func(next Handler) Handler {

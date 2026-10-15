@@ -53,18 +53,18 @@
 //
 // Handlers are registered with App methods and wrapped in an adapter that
 // carries their type, because Go methods cannot have type parameters:
-// Typed for Subscribe, Consume and ConsumeOrdered, TypedReply for Reply and
+// Typed for Subscribe, Consume and ConsumeOrdered, TypedReply for SubscribeReply and
 // service endpoints, TypedBatch for ConsumeBatch. T is inferred from the
 // handler:
 //
-//	app.Reply("billing.get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetInvoice]) (Invoice, error) {
+//	app.SubscribeReply("billing.get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetInvoice]) (Invoice, error) {
 //		return load(ctx, m.Data.ID)
 //	}))
 //
 // The registration methods:
 //
 //   - Subscribe handles core NATS messages, with wildcards and queue groups (WithQueue).
-//   - Reply answers requests; the returned value is encoded and sent back.
+//   - SubscribeReply answers requests; the returned value is encoded and sent back.
 //   - Consume handles a durable JetStream consumer; pull and push consumers
 //     are detected at Start.
 //   - ConsumeOrdered reads a stream in order through an ephemeral ordered
@@ -95,11 +95,11 @@
 //
 // For Consume and ConsumeBatch the server redelivers: a failed message is
 // naked with a delay from the backoff, by default ExponentialBackoff(1s, 1m),
-// and retried without limit. For Subscribe, Reply and ConsumeOrdered there is
+// and retried without limit. For Subscribe, SubscribeReply and ConsumeOrdered there is
 // no redelivery, so a failed message is not retried unless WithMaxAttempts is set;
 // the library then retries in the worker, waiting for the backoff between
 // attempts. Unlimited is allowed but can stall the subscription while
-// failures last, Reply must finish its retries within the requester's timeout,
+// failures last, SubscribeReply must finish its retries within the requester's timeout,
 // and ConsumeOrdered stalls the whole stream while it retries, which keeps
 // the order.
 //
@@ -115,14 +115,14 @@
 //	DLQ publish fails                             -                   log, NakWithDelay
 //
 // A panic in a handler is recovered by the worker and handled like any other
-// error; the panic value and stack are logged. A requester of a Reply handler
+// error; the panic value and stack are logged. A requester of a SubscribeReply handler
 // or micro endpoint that panicked receives Nats-Service-Error "internal
 // error" with code 500, never the panic text. Recover only turns the panic
 // into an error earlier, for the middleware around it.
 //
 // The DLQ subject must be a valid subject without wildcard tokens (* or >),
 // captured by an existing stream other than the handler's source stream, and
-// must not match a Subscribe or Reply handler's own subject; Start fails
+// must not match a Subscribe or SubscribeReply handler's own subject; Start fails
 // otherwise. The dead-lettered message keeps its payload and headers and gains
 // Nats-DLQ-Error, Nats-DLQ-Subject and Nats-DLQ-Deliveries, plus, for
 // JetStream consumers, Nats-DLQ-Stream, Nats-DLQ-Consumer, Nats-DLQ-Sequence
@@ -187,7 +187,7 @@
 //
 // Service registers a NATS micro service, found by "nats micro ls|info|stats".
 // Endpoint adds typed endpoints to it, or to a Group of it, and works like
-// Reply: the returned value is encoded and sent back, and an error becomes a
+// SubscribeReply: the returned value is encoded and sent back, and an error becomes a
 // micro service error (code 400 for Terminal, 500 otherwise) that the service
 // STATS count. A request without a reply subject is skipped with a warning.
 // Health reports one handler per endpoint, named after the service, the

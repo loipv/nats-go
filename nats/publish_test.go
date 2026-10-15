@@ -45,7 +45,7 @@ func TestPublishMiddlewareSetsHeader(t *testing.T) {
 func TestRequestTypedAndServiceError(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
-	a.Reply("inc", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
+	a.SubscribeReply("inc", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Data < 0 {
 			return 0, Terminal(errors.New("negative"))
 		}
@@ -130,7 +130,7 @@ func TestHandlerCanPublishDuringShutdown(t *testing.T) {
 func requestApp(t *testing.T) *App {
 	t.Helper()
 	a := newApp(t, runServer(t))
-	a.Reply("req.order", TypedReply(func(context.Context, *Msg[[]byte]) (map[string]string, error) {
+	a.SubscribeReply("req.order", TypedReply(func(context.Context, *Msg[[]byte]) (map[string]string, error) {
 		return map[string]string{"ID": "1"}, nil
 	}))
 	start(t, a)

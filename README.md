@@ -70,7 +70,7 @@ func main() {
 }
 ```
 
-Handlers are registered with `App` methods and wrapped in `nats.Typed` (`nats.TypedReply` for `Reply` and service endpoints, `nats.TypedBatch` for `ConsumeBatch`), because Go methods cannot have type parameters. The payload type is inferred from the handler, and passing a handler of the wrong kind does not compile.
+Handlers are registered with `App` methods and wrapped in `nats.Typed` (`nats.TypedReply` for `SubscribeReply` and service endpoints, `nats.TypedBatch` for `ConsumeBatch`), because Go methods cannot have type parameters. The payload type is inferred from the handler, and passing a handler of the wrong kind does not compile.
 
 ## Examples
 
@@ -79,7 +79,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | Example | Shows |
 |---|---|
 | [subscribe](examples/subscribe) | Wildcards, queue groups, concurrent handlers |
-| [request-reply](examples/request-reply) | `Reply`, `Request` decoding into a value, `ServiceError` |
+| [request-reply](examples/request-reply) | `SubscribeReply`, `Request` decoding into a value, `ServiceError` |
 | [jetstream](examples/jetstream) | Declared stream and consumers, `PublishJS` with `WithMsgID`, automatic and manual ack |
 | [ordered](examples/ordered) | `ConsumeOrdered` with subject filters |
 | [middleware](examples/middleware) | `Use`, `WithMiddleware`, `Recover`, `Logger`, `UsePublish` |
@@ -101,7 +101,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | `nats.Terminal(err)`, decode or validation failure | `Term` (never redelivered) | no | immediately, if `WithDLQ(subject)` is set | `Nats-Service-Error`, code 400 |
 | panic | handled as any other error | as above | as above | `Nats-Service-Error: internal error`, code 500; the panic and stack are only logged |
 
-Every `Term` carries the first line of the error as its reason, reported by the server in the `$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED` advisory. Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `Reply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
+Every `Term` carries the first line of the error as its reason, reported by the server in the `$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED` advisory. Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `SubscribeReply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
 
 With `nats.WithManualAck()` the handler acks itself via `m.Ack()`, `m.Nak()`, `m.NakWithDelay(d)`, `m.Term()` or `m.InProgress()`.
 
@@ -122,8 +122,8 @@ app.Consume("PAYMENTS", "charger", nats.Typed(charge),
 ```
 
 - With `Consume` and `ConsumeBatch` the server redelivers: a failed message is naked with a delay, and `m.Attempt()` is the delivery count. `MaxDeliver` on the consumer must be `-1` or greater than `WithMaxAttempts`, or `Start` fails.
-- With `Subscribe`, `Reply` and `ConsumeOrdered` there is no redelivery, so `WithMaxAttempts(n)` makes the library retry in the worker, waiting for the backoff between attempts. `Unlimited` can stall the subscription while failures last, a `Reply` must finish its retries within the requester's timeout, and `ConsumeOrdered` stalls the whole stream while it retries (which keeps the order).
-- `WithDLQ(subject)` publishes the original payload and headers plus `Nats-DLQ-Error`, `Nats-DLQ-Subject`, `Nats-DLQ-Deliveries` and, for JetStream consumers, `Nats-DLQ-Stream`, `Nats-DLQ-Consumer`, `Nats-DLQ-Sequence` and `Nats-DLQ-Msg-Id`. The subject must be a valid subject without a `*` or `>` token. `Start` fails if no stream captures the subject, if it is the handler's source stream, or if a `Subscribe` or `Reply` handler's own subject matches it.
+- With `Subscribe`, `SubscribeReply` and `ConsumeOrdered` there is no redelivery, so `WithMaxAttempts(n)` makes the library retry in the worker, waiting for the backoff between attempts. `Unlimited` can stall the subscription while failures last, a `SubscribeReply` must finish its retries within the requester's timeout, and `ConsumeOrdered` stalls the whole stream while it retries (which keeps the order).
+- `WithDLQ(subject)` publishes the original payload and headers plus `Nats-DLQ-Error`, `Nats-DLQ-Subject`, `Nats-DLQ-Deliveries` and, for JetStream consumers, `Nats-DLQ-Stream`, `Nats-DLQ-Consumer`, `Nats-DLQ-Sequence` and `Nats-DLQ-Msg-Id`. The subject must be a valid subject without a `*` or `>` token. `Start` fails if no stream captures the subject, if it is the handler's source stream, or if a `Subscribe` or `SubscribeReply` handler's own subject matches it.
 - `WithMaxAttempts`, `WithBackoff` and `WithDLQ` cannot be combined with `WithManualAck`.
 - `WithAutoInProgress()` extends the ack wait of a `Consume` or `ConsumeBatch` message while the handler runs; use it with `WithTimeout(d)`.
 
@@ -161,7 +161,7 @@ Any other error fails the whole batch. A non-nil `*BatchError` is found even ins
 
 ### Panics
 
-A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. The requester of a `Reply` handler or micro endpoint that panicked gets `Nats-Service-Error: internal error` with code 500, never the panic text. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
+A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. The requester of a `SubscribeReply` handler or micro endpoint that panicked gets `Nats-Service-Error: internal error` with code 500, never the panic text. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
 
 ## Integrations
 
@@ -178,7 +178,7 @@ inv.Endpoint("get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetSto
 inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMetadata(map[string]string{"owner": "ops"})) // inventory.admin.reset
 ```
 
-`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `Reply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff` and `WithDLQ` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint, named after the service, the group prefixes and the endpoint joined with `.` (`orders.v2.get`). A request without a reply subject is skipped with a warning.
+`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `SubscribeReply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff` and `WithDLQ` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint, named after the service, the group prefixes and the endpoint joined with `.` (`orders.v2.get`). A request without a reply subject is skipped with a warning.
 
 - An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.
@@ -228,7 +228,7 @@ app.UsePublish(natsotel.PublishMiddleware())
 The trace context travels in the message headers: a `send <subject>` producer span is the parent of the `process <subject>` consumer span, across services. Each attempt is its own span, with `messaging.nats.attempt`. The middleware records `messaging.client.operation.duration`, `messaging.client.sent.messages`, `messaging.process.duration` and `messaging.client.consumed.messages`. A message skipped by `Idempotent` is tagged `messaging.nats.duplicate` and is not counted as an error. The global providers and propagator are used unless you pass `WithTracerProvider`, `WithMeterProvider` or `WithPropagator`.
 
 - **Cardinality**: the destination name is the message subject by default, and it is a metric attribute. Subjects that contain identifiers (`orders.42.created`) create one series each. Use `natsotel.WithDestination(func(subject string) string { ... })` to map them to something bounded such as `orders.*.created`.
-- **Not covered**: `ConsumeBatch` handlers (they have no middleware) and responses sent by `Reply` workers or micro endpoints (they do not go through `PublishMiddleware`). The `send` span of a `PublishJSBatch` message ends when the message is handed to the client and does not see its ack result.
+- **Not covered**: `ConsumeBatch` handlers (they have no middleware) and responses sent by `SubscribeReply` workers or micro endpoints (they do not go through `PublishMiddleware`). The `send` span of a `PublishJSBatch` message ends when the message is handed to the client and does not see its ack result.
 
 ### CloudEvents
 
@@ -247,7 +247,7 @@ err := ce.Publish(ctx, "order.created", order, cloudevents.WithExtension("region
 
 CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and the payload is the body. An event of type `T` is published on `events.T` (change it with `cloudevents.WithSubjectFunc`). `ce.PublishJS` sends to a stream and uses the event id as `Nats-Msg-Id`, so a repeated id is dropped within the stream's `Duplicates` window. Extra headers go through `cloudevents.WithHeader`; `WithPubOptions` is for core options that are not headers, and must not carry `nats.WithHeader`, which would replace the CloudEvents headers.
 
-- `Handle` is one-way and never replies; use `app.Reply` for request/reply.
+- `Handle` is one-way and never replies; use `app.SubscribeReply` for request/reply.
 - An event with invalid attributes (missing `ce-id`, `ce-source`, `ce-type` or `ce-specversion`, a version other than `1.0`, a bad `ce-time`) fails with `nats.Terminal` and the handler is not called; with the `WithDLQ` option it is dead-lettered.
 - For a JetStream durable consumer, use `app.Consume` with `cloudevents.FromHeader`.
 - Structured and batched modes are not supported.

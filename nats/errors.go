@@ -29,7 +29,7 @@ func (e *terminalError) Unwrap() error { return e.err }
 
 // Terminal marks err as non-retryable. A JetStream message whose handler
 // returns a terminal error is terminated (Term) instead of redelivered (Nak),
-// and a Reply handler responds with code 400 instead of 500.
+// and a SubscribeReply handler responds with code 400 instead of 500.
 // Terminal(nil) returns nil.
 func Terminal(err error) error {
 	if err == nil {
