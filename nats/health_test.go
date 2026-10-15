@@ -18,7 +18,7 @@ func freePort(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port
 }
 
@@ -43,7 +43,7 @@ func TestHealthLifecycle(t *testing.T) {
 }
 
 // A deleted consumer makes the handler restarting, not stopped.
-func TestHealthDegradedWhenHandlerStopped(t *testing.T) {
+func TestHealthDegradedWhenHandlerRestarting(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s, WithRestartBackoff(func(int) time.Duration { return time.Hour }))
 	setupStream(t, a)

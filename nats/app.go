@@ -336,6 +336,22 @@ func (a *App) stopHooks(ctx context.Context, n int) error {
 			}
 		}
 	}
+	return join(errs)
+}
+
+// join is errors.Join, except that a lone error is returned as is, keeping
+// its type.
+func join(errs []error) error {
+	var lone error
+	n := 0
+	for _, err := range errs {
+		if err != nil {
+			lone, n = err, n+1
+		}
+	}
+	if n == 1 {
+		return lone
+	}
 	return errors.Join(errs...)
 }
 
@@ -381,7 +397,7 @@ func (a *App) stopRunners(ctx context.Context, runners []runner) error {
 		})
 	}
 	wg.Wait()
-	return errors.Join(errs...)
+	return join(errs)
 }
 
 // Shutdown stops intake on every handler, waits for in-flight handlers and

@@ -24,9 +24,10 @@ type KVStore struct {
 
 // NewKVStore registers bucket with app so Start creates it. It does no I/O.
 // Call it before Start: a store created later is never provisioned and its
-// methods return ErrNotRunning. An empty bucket fails Start. The server only accepts whole-second TTLs of at
-// least one second, so every TTL passed to Begin and Complete is rounded up to
-// the next whole second (500ms becomes 1s, 1.2s becomes 2s).
+// methods return ErrNotRunning. An empty bucket fails Start. The server only
+// accepts whole-second TTLs of at least one second, so every TTL passed to
+// Begin and Complete is rounded up to the next whole second (500ms becomes
+// 1s, 1.2s becomes 2s).
 func NewKVStore(app *App, bucket string) *KVStore {
 	s := &KVStore{app: app, bucket: bucket}
 	if bucket == "" {

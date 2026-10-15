@@ -168,7 +168,7 @@ func TestConsumePanicWithRecoverKeepsWorking(t *testing.T) {
 
 // A deleted consumer makes the handler restart, never stop while
 // the App runs.
-func TestConsumeStoppedWhenConsumerDeleted(t *testing.T) {
+func TestConsumeRestartingWhenConsumerDeleted(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s, WithRestartBackoff(func(int) time.Duration { return time.Hour }))
 	setupStream(t, a)
@@ -221,7 +221,7 @@ func TestConsumeTermCarriesReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sub.Unsubscribe()
+	defer func() { _ = sub.Unsubscribe() }()
 	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}); err != nil {
 		t.Fatal(err)
 	}

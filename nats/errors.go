@@ -9,16 +9,19 @@ import (
 var (
 	// ErrNotRunning is returned when publishing before Start or after Shutdown.
 	ErrNotRunning = errors.New("nats: app not running")
-	// ErrAlreadyStarted is returned when Start is called twice or a handler is registered after Start.
+	// ErrAlreadyStarted is returned when Start is called twice. A registration
+	// made after Start is ignored and logged with it.
 	ErrAlreadyStarted = errors.New("nats: app already started")
 	// ErrNotJetStream is returned when calling an ack method on a core NATS message.
 	ErrNotJetStream = errors.New("nats: not a JetStream message")
 	// ErrNotCore is returned by Msg.Respond and Msg.RespondError on a JetStream
 	// message, whose reply subject is its ack subject.
 	ErrNotCore = errors.New("nats: not a core NATS message")
-	// ErrDuplicate is returned by IdempotencyStore.Begin when the key was already completed.
+	// ErrDuplicate is returned by IdempotencyStore.Begin when the key was
+	// already completed.
 	ErrDuplicate = errors.New("nats: duplicate message")
-	// ErrInProgress is returned by IdempotencyStore.Begin when the key is claimed and not yet completed.
+	// ErrInProgress is returned by IdempotencyStore.Begin when the key is
+	// claimed and not yet completed.
 	ErrInProgress = errors.New("nats: message in progress elsewhere")
 )
 

@@ -184,8 +184,9 @@
 // fail only the listed indexes, or any other error to fail them all. A
 // non-nil *BatchError is found through errors.Join or a wrapper and fails only
 // its listed indexes, acking the rest; only a typed-nil *BatchError returned
-// directly counts as no error. Failed messages follow the table above. Middleware does not apply to batches, and
-// Idempotent cannot be used with them.
+// directly counts as no error. Failed messages follow the table above.
+// Middleware does not apply to batches, and Idempotent cannot be used with
+// them.
 //
 // Consume and ConsumeBatch handlers are supervised: when the consumer or its
 // stream is deleted, the handler goes to the "restarting" state, recreates
@@ -217,12 +218,14 @@
 //
 // Service registers a NATS micro service, found by "nats micro ls|info|stats".
 // Endpoint adds typed endpoints to it, or to a Group of it, and works like
-// SubscribeReply: the returned value is encoded and sent back, and an error becomes a
-// micro service error (code 400 for Terminal, 500 otherwise) that the service
-// STATS count. A request without a reply subject is skipped with a warning.
-// Health reports one handler per endpoint, named after the service, the
-// group prefixes and the endpoint joined with "." (orders.v2.get). The WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff and WithDLQ options
-// apply; WithEndpointSubject and WithEndpointMetadata are specific to endpoints.
+// SubscribeReply: the returned value is encoded and sent back, and an error
+// becomes a micro service error (code 400 for Terminal, 500 otherwise) that
+// the service STATS count. A request without a reply subject is skipped with
+// a warning. Health reports one handler per endpoint, named after the
+// service, the group prefixes and the endpoint joined with "."
+// (orders.v2.get). The WithTimeout, WithMiddleware, WithMaxAttempts,
+// WithBackoff and WithDLQ options apply; WithEndpointSubject and
+// WithEndpointMetadata are specific to endpoints.
 //
 //	svc := app.Service(micro.Config{Name: "inventory", Version: "1.0.0"})
 //	svc.Group("inventory").Endpoint("get", nats.TypedReply(getStock)) // subject inventory.get

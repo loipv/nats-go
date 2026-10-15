@@ -138,27 +138,29 @@ type endpointReg struct {
 	h      Handler
 }
 
-// subject is the endpoint's full subject, as micro builds it.
-func (e endpointReg) subject() string {
-	parts := make([]string, 0, len(e.groups)+1)
+// path joins first (when not empty), the group prefixes and last with ".".
+func (e endpointReg) path(first, last string) string {
+	var parts []string
+	if first != "" {
+		parts = append(parts, first)
+	}
 	for _, g := range e.groups {
 		parts = append(parts, g.prefix)
 	}
+	return strings.Join(append(parts, last), ".")
+}
+
+// subject is the endpoint's full subject, as micro builds it.
+func (e endpointReg) subject() string {
 	if e.cfg.endpointSubject != "" {
-		return strings.Join(append(parts, e.cfg.endpointSubject), ".")
+		return e.path("", e.cfg.endpointSubject)
 	}
-	return strings.Join(append(parts, e.name), ".")
+	return e.path("", e.name)
 }
 
 // healthName is the service name, the group prefixes and the endpoint name,
 // joined with ".".
-func (e endpointReg) healthName(service string) string {
-	parts := []string{service}
-	for _, g := range e.groups {
-		parts = append(parts, g.prefix)
-	}
-	return strings.Join(append(parts, e.name), ".")
-}
+func (e endpointReg) healthName(service string) string { return e.path(service, e.name) }
 
 // prepare checks the DLQ of every endpoint, as coreReg.prepare does.
 func (r *serviceReg) prepare(ctx context.Context, a *App) error {

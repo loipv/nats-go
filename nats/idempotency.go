@@ -82,7 +82,8 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 				}
 				return err
 			}
-			// abort releases the claim even if ctx is already cancelled, or the retry sees ErrInProgress.
+			// abort releases the claim even if ctx is already cancelled, or the
+			// retry sees ErrInProgress.
 			abort := func() {
 				if aerr := store.Abort(context.WithoutCancel(ctx), key); aerr != nil {
 					log := sinkFrom(ctx)

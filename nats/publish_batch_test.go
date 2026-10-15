@@ -179,7 +179,7 @@ func TestPublishJSBatchDeadlineStopsSending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sink.Unsubscribe()
+	defer func() { _ = sink.Unsubscribe() }()
 	msgs := make([]BatchMsg, 4010)
 	for i := range msgs {
 		msgs[i] = BatchMsg{Subject: "sink.x", Data: i}
@@ -206,7 +206,7 @@ func TestPublishJSBatchUnansweredFuturesTimeOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sink.Unsubscribe()
+	defer func() { _ = sink.Unsubscribe() }()
 	msgs := make([]BatchMsg, 4000)
 	for i := range msgs {
 		msgs[i] = BatchMsg{Subject: "sink.x", Data: i}

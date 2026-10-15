@@ -91,7 +91,7 @@ type jsReg struct {
 
 // prepare resolves the consumer, detecting pull or push, without consuming.
 func (r *jsReg) prepare(ctx context.Context, a *App) error {
-	wrap := func(err error) error { return fmt.Errorf("nats: consume %s: %w", r.name(), err) }
+	wrap := func(err error) error { return fmt.Errorf("nats: %s %s: %w", r.op(), r.name(), err) }
 	r.pull, r.push, r.info, r.ackWait = nil, nil, nil, defaultAckWait
 	if r.kind == kindOrdered {
 		cfg := jetstream.OrderedConsumerConfig{FilterSubjects: r.cfg.filters}
@@ -112,7 +112,7 @@ func (r *jsReg) prepare(ctx context.Context, a *App) error {
 			return wrap(err)
 		}
 		if slices.Contains(r.cfg.used, "WithPullMaxMessages") {
-			return fmt.Errorf("nats: consume %s: WithPullMaxMessages applies to pull consumers only", r.name())
+			return fmt.Errorf("nats: %s %s: WithPullMaxMessages applies to pull consumers only", r.op(), r.name())
 		}
 		r.push, r.info = pc, pc.CachedInfo()
 	} else if err != nil {
@@ -131,7 +131,7 @@ func (r *jsReg) check(ctx context.Context, a *App) error {
 	rc := r.cfg.retry(r.kind)
 	if rc.dlq != "" {
 		if err := a.checkDLQ(ctx, rc.dlq, r.stream); err != nil {
-			return fmt.Errorf("nats: consume %s: %w", r.name(), err)
+			return fmt.Errorf("nats: %s %s: %w", r.op(), r.name(), err)
 		}
 	}
 	if r.kind == kindOrdered || r.cfg.manualAck {
@@ -141,12 +141,20 @@ func (r *jsReg) check(ctx context.Context, a *App) error {
 	// attempt could reach the DLQ.
 	maxDeliver := r.info.Config.MaxDeliver
 	if rc.maxAttempts != Unlimited && maxDeliver != -1 && maxDeliver <= rc.maxAttempts {
-		return fmt.Errorf("nats: consume %s: MaxDeliver %d must exceed WithMaxAttempts %d", r.name(), maxDeliver, rc.maxAttempts)
+		return fmt.Errorf("nats: %s %s: MaxDeliver %d must exceed WithMaxAttempts %d", r.op(), r.name(), maxDeliver, rc.maxAttempts)
 	}
 	if rc.maxAttempts == Unlimited && maxDeliver > 0 {
 		a.opts.logger.Warn("nats: consumer MaxDeliver drops messages the handler retries forever", "handler", r.name(), "max_deliver", maxDeliver)
 	}
 	return nil
+}
+
+// op names the registration in errors.
+func (r *jsReg) op() string {
+	if r.kind == kindBatch {
+		return "consume batch"
+	}
+	return "consume"
 }
 
 func (r *jsReg) name() string {
@@ -285,7 +293,7 @@ func (rn *jsRunner) consume(r *jsReg, cb jetstream.MessageHandler, onErr jetstre
 		cc, err = r.pull.Consume(cb, opts...)
 	}
 	if err != nil {
-		return fmt.Errorf("nats: consume %s: %w", r.name(), err)
+		return fmt.Errorf("nats: %s %s: %w", r.op(), r.name(), err)
 	}
 	rn.cc = cc
 	return nil
