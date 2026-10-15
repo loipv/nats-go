@@ -31,9 +31,17 @@ func (a *App) Health() Report {
 	}
 	notRunning := false
 	for _, rn := range runners {
-		st := rn.status()
-		notRunning = notRunning || st.State != "running"
-		r.Handlers = append(r.Handlers, st)
+		// A service runner reports one status per endpoint.
+		var sts []HandlerStatus
+		if m, ok := rn.(interface{ statuses() []HandlerStatus }); ok {
+			sts = m.statuses()
+		} else {
+			sts = []HandlerStatus{rn.status()}
+		}
+		for _, st := range sts {
+			notRunning = notRunning || st.State != "running"
+			r.Handlers = append(r.Handlers, st)
+		}
 	}
 	switch {
 	case !r.Ready || r.Connection == natsio.CLOSED.String():

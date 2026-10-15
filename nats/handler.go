@@ -90,11 +90,12 @@ const (
 	kindConsume   handlerKind = "consume"
 	kindOrdered   handlerKind = "ordered"
 	kindBatch     handlerKind = "batch"
+	kindEndpoint  handlerKind = "endpoint"
 )
 
 // HandlerOption configures a handler registered with Subscribe, Reply,
-// Consume, ConsumeOrdered or a batch consumer. Using an option on a handler kind it does not
-// apply to is a registration error returned by Start.
+// Consume, ConsumeOrdered, a batch consumer or Endpoint. Using an option on a
+// handler kind it does not apply to is a registration error returned by Start.
 type HandlerOption func(*handlerConfig)
 
 type handlerConfig struct {
@@ -113,7 +114,10 @@ type handlerConfig struct {
 	autoInProgress bool
 	batchSize      int
 	batchWait      time.Duration
-	used           []string
+	// endpointSubject and endpointMetadata are passed to micro by Endpoint.
+	endpointSubject  string
+	endpointMetadata map[string]string
+	used             []string
 }
 
 // allowedKinds returns the handler kinds a restricted option applies to,
@@ -122,8 +126,10 @@ func allowedKinds(option string) []handlerKind {
 	switch option {
 	case "Queue":
 		return []handlerKind{kindSubscribe, kindReply}
-	case "Concurrency", "With":
+	case "Concurrency":
 		return []handlerKind{kindSubscribe, kindReply, kindConsume, kindOrdered}
+	case "With":
+		return []handlerKind{kindSubscribe, kindReply, kindConsume, kindOrdered, kindEndpoint}
 	case "ManualAck":
 		return []handlerKind{kindConsume, kindBatch}
 	case "PullMaxMessages":
@@ -134,6 +140,8 @@ func allowedKinds(option string) []handlerKind {
 		return []handlerKind{kindConsume, kindBatch}
 	case "BatchSize", "BatchWait":
 		return []handlerKind{kindBatch}
+	case "EndpointSubject", "EndpointMetadata":
+		return []handlerKind{kindEndpoint}
 	}
 	return nil
 }

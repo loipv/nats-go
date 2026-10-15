@@ -3,7 +3,7 @@ package nats
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +33,13 @@ func Subscribe[T any](app *App, subject string, fn func(context.Context, *Msg[T]
 // finish, so the total retry time must fit within the requester's timeout.
 // Unlimited can stall the subscription while failures last.
 func Reply[Req, Resp any](app *App, subject string, fn func(context.Context, *Msg[Req]) (Resp, error), opts ...HandlerOption) {
-	h := typed(app.opts.codec, func(ctx context.Context, m *Msg[Req]) error {
+	registerCore(app, kindReply, subject, replyHandler(app.opts.codec, fn), opts)
+}
+
+// replyHandler adapts a typed responder to a raw Handler that stores the
+// response in the reply slot of ctx.
+func replyHandler[Req, Resp any](c Codec, fn func(context.Context, *Msg[Req]) (Resp, error)) Handler {
+	return typed(c, func(ctx context.Context, m *Msg[Req]) error {
 		resp, err := fn(ctx, m)
 		if err != nil {
 			return err
@@ -43,7 +49,6 @@ func Reply[Req, Resp any](app *App, subject string, fn func(context.Context, *Ms
 		}
 		return nil
 	})
-	registerCore(app, kindReply, subject, h, opts)
 }
 
 // reply carries Reply's response out of the handler chain. The worker sends
@@ -120,24 +125,17 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			a.handleLocal(ctx, h, m, rc, stopping, dlqSource{}, log)
 			return
 		}
-		out := &reply{}
-		abandoned, err := a.handleLocal(context.WithValue(ctx, replyKey{}, out), h, m, rc, stopping, dlqSource{}, log)
-		if abandoned {
-			return
-		}
-		if err == nil && out.set {
-			var data []byte
-			if data, err = encode(a.opts.codec, out.v); err != nil {
-				err = fmt.Errorf("nats: encode response: %w", err)
-				log.Error("nats: handler failed", "subject", m.Subject, "error", err)
-			} else if err := a.nc.Publish(m.Reply, data); err != nil {
-				log.Error("nats: send response", "subject", m.Subject, "error", err)
-			}
-		}
-		// The requester gets the error even when the message went to the DLQ.
-		if err != nil {
+		resp, abandoned, err := a.handleRequest(ctx, h, m, rc, stopping, log)
+		switch {
+		case abandoned:
+		case err != nil:
+			// The requester gets the error even when the message went to the DLQ.
 			if err := respondError(a.nc, m.Reply, err); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
+			}
+		case resp != nil:
+			if err := a.nc.Publish(m.Reply, resp); err != nil {
+				log.Error("nats: send response", "subject", m.Subject, "error", err)
 			}
 		}
 	})
@@ -156,14 +154,40 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 	return &coreRunner{name: r.subject, kind: r.kind, sub: sub, pool: p, stopping: stopping}, nil
 }
 
-func respondError(nc *natsio.Conn, reply string, err error) error {
-	code := 500
-	if IsTerminal(err) {
-		code = 400
+// handleRequest runs a responder handler with in-process retries and the
+// DLQ, like handleLocal, and encodes the response it stored in the reply
+// slot. resp is nil when the chain succeeded without setting a response (a
+// middleware did not call next). An encode failure is returned, not retried.
+func (a *App) handleRequest(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, log *slog.Logger) (resp []byte, abandoned bool, err error) {
+	out := &reply{}
+	abandoned, err = a.handleLocal(context.WithValue(ctx, replyKey{}, out), h, m, rc, stopping, dlqSource{}, log)
+	if abandoned || err != nil || !out.set {
+		return nil, abandoned, err
 	}
+	if resp, err = encode(a.opts.codec, out.v); err != nil {
+		err = fmt.Errorf("nats: encode response: %w", err)
+		log.Error("nats: handler failed", "subject", m.Subject, "error", err)
+		return nil, false, err
+	}
+	if resp == nil {
+		resp = []byte{} // a nil []byte response is still a response
+	}
+	return resp, false, nil
+}
+
+// errorCode is the service error code for a handler error: 400 for Terminal
+// errors (including decode and validation failures), 500 otherwise.
+func errorCode(err error) string {
+	if IsTerminal(err) {
+		return "400"
+	}
+	return "500"
+}
+
+func respondError(nc *natsio.Conn, reply string, err error) error {
 	m := natsio.NewMsg(reply)
 	m.Header.Set("Nats-Service-Error", firstLine(err))
-	m.Header.Set("Nats-Service-Error-Code", strconv.Itoa(code))
+	m.Header.Set("Nats-Service-Error-Code", errorCode(err))
 	return nc.PublishMsg(m)
 }
 

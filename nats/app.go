@@ -43,9 +43,10 @@ type App struct {
 
 // HandlerStatus describes one registered handler.
 type HandlerStatus struct {
-	// Name is the subject, "stream/consumer" or "stream (ordered)".
+	// Name is the subject, "stream/consumer", "stream (ordered)" or
+	// "service.endpoint".
 	Name string `json:"name"`
-	// Kind is subscribe, reply, consume, ordered or batch.
+	// Kind is subscribe, reply, consume, ordered, batch or endpoint.
 	Kind string `json:"kind"`
 	// State is running, restarting (its consumer was deleted) or stopped
 	// (after Shutdown).
@@ -189,7 +190,7 @@ func (a *App) Start(ctx context.Context) error {
 			}
 		}
 		switch r.(type) {
-		case *coreReg:
+		case *coreReg, *serviceReg:
 			core = append(core, r)
 		default:
 			jsRegs = append(jsRegs, r)
