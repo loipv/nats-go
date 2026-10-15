@@ -15,8 +15,10 @@ type BatchMsg struct {
 	Opts    []PubOption
 }
 
-// PublishBatchError reports the messages of a batch that were not stored,
-// keyed by their index in the batch. The other messages may have been stored.
+// PublishBatchError reports the messages of a batch that failed, keyed by their
+// index in the batch. A failed message may still have been stored: when the
+// error is the context's, the outcome is unknown. The other messages may have
+// been stored too.
 type PublishBatchError struct{ Failed map[int]error }
 
 func (e *PublishBatchError) Error() string {
@@ -28,8 +30,9 @@ func (e *PublishBatchError) Error() string {
 
 // PublishJSBatch publishes msgs to JetStream in order without waiting for each
 // ack, then waits for all of them or for ctx. It is not atomic. acks[i] is set
-// for every stored message; if any failed (send, ack, or ctx expired before the
-// ack) the error is a *PublishBatchError. A message that cannot be encoded
+// for every message known to be stored; if any failed (send, ack, or ctx
+// expired before the ack, in which case the outcome is unknown) the error is a
+// *PublishBatchError. A message that cannot be encoded
 // fails the whole call before anything is sent.
 func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream.PubAck, error) {
 	if !a.pubOpen.Load() {
@@ -62,23 +65,38 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 		}
 	}
 	acks := make([]*jetstream.PubAck, len(msgs))
-wait:
+	// settle records the result of future i if it is already there.
+	settle := func(i int) bool {
+		select {
+		case ack := <-futures[i].Ok():
+			acks[i] = ack
+		case err := <-futures[i].Err():
+			failed[i] = err
+		default:
+			return false
+		}
+		return true
+	}
+	expired := false
 	for i, f := range futures {
-		if f == nil {
+		if f == nil || settle(i) {
 			continue
 		}
-		select {
-		case ack := <-f.Ok():
-			acks[i] = ack
-		case err := <-f.Err():
-			failed[i] = err
-		case <-ctx.Done():
-			for j := i; j < len(futures); j++ {
-				if futures[j] != nil {
-					failed[j] = ctx.Err()
-				}
+		if !expired {
+			select {
+			case ack := <-f.Ok():
+				acks[i] = ack
+				continue
+			case err := <-f.Err():
+				failed[i] = err
+				continue
+			case <-ctx.Done():
+				expired = true
 			}
-			break wait
+		}
+		// ctx expired: acks that already arrived still count, the rest is unknown.
+		if !settle(i) {
+			failed[i] = ctx.Err()
 		}
 	}
 	if len(failed) > 0 {

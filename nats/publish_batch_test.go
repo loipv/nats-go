@@ -99,3 +99,37 @@ func TestPublishJSBatchNotRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Acks that arrived before ctx expired must be reported as stored.
+func TestPublishJSBatchReadyAcksBeatExpiredContext(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var n atomic.Int32
+	a.UsePublish(func(next PublishFunc) PublishFunc {
+		return func(ctx context.Context, m *RawMsg) error {
+			err := next(ctx, m)
+			if n.Add(1) == 4 { // last message: let every ack arrive, then expire ctx
+				time.Sleep(200 * time.Millisecond)
+				cancel()
+			}
+			return err
+		}
+	})
+	start(t, a)
+	var msgs []BatchMsg
+	for i := range 4 {
+		msgs = append(msgs, BatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
+	}
+	acks, err := a.PublishJSBatch(ctx, msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ack := range acks {
+		if ack == nil {
+			t.Fatal("ack lost", i)
+		}
+	}
+}
