@@ -153,6 +153,33 @@ func TestConsumeBatchTypedNilBatchError(t *testing.T) {
 	})
 }
 
+func TestBatchJoinedBatchErrorFailsListedOnly(t *testing.T) {
+	s := runServer(t)
+	seed := newApp(t, s)
+	setupStream(t, seed)
+	start(t, seed)
+	for i := range 3 {
+		_, _ = seed.PublishJS(context.Background(), "orders.x", order{ID: fmt.Sprint(i)})
+	}
+	a := newApp(t, s)
+	sizes := make(chan int, 10)
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(_ context.Context, ms []*Msg[order]) error {
+		sizes <- len(ms)
+		if len(ms) == 3 {
+			return errors.Join(errors.New("boom"), &BatchError{Failed: map[int]error{0: errors.New("x")}})
+		}
+		return nil
+	}), WithBatchSize(10), WithBatchWait(200*time.Millisecond), WithBackoff(func(int) time.Duration { return 10 * time.Millisecond }))
+	start(t, a)
+	if n := recv(t, sizes); n != 3 {
+		t.Fatal("first batch", n)
+	}
+	if n := recv(t, sizes); n != 1 { // only index 0 is redelivered
+		t.Fatal("second batch", n)
+	}
+	waitFor(t, func() bool { return pendingAcks(t, a, "billing") == 0 })
+}
+
 func TestBatchJoinedNilBatchErrorFails(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)

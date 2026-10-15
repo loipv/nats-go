@@ -153,7 +153,7 @@ app.ConsumeBatch("ORDERS", "loader", nats.TypedBatch(func(ctx context.Context, m
 }), nats.WithBatchSize(100), nats.WithBatchWait(time.Second))
 ```
 
-Any other error fails the whole batch, including a `*BatchError` wrapped in `errors.Join` or another error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it.
+Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it.
 
 ### Supervisor
 

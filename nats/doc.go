@@ -151,9 +151,10 @@
 //
 // ConsumeBatch passes up to WithBatchSize messages (waiting at most WithBatchWait) to
 // one call on a pull consumer. Return nil to ack them all, a *BatchError to
-// fail only the listed indexes, or any other error to fail them all; a
-// *BatchError inside errors.Join or a wrapper fails them all too. Failed
-// messages follow the table above. Middleware does not apply to batches, and
+// fail only the listed indexes, or any other error to fail them all. A
+// non-nil *BatchError is found through errors.Join or a wrapper and fails only
+// its listed indexes, acking the rest; only a typed-nil *BatchError returned
+// directly counts as no error. Failed messages follow the table above. Middleware does not apply to batches, and
 // Idempotent cannot be used with them.
 //
 // Consume and ConsumeBatch handlers are supervised: when the consumer or its

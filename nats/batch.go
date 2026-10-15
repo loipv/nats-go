@@ -12,8 +12,9 @@ import (
 )
 
 // BatchError reports which messages of a batch failed, by index into the
-// slice passed to the batch handler. The other messages are acked; a nil
-// *BatchError acks them all.
+// slice passed to the batch handler. The other messages are acked, also when
+// the *BatchError is wrapped (it is found with errors.As); a nil *BatchError
+// returned directly acks them all.
 type BatchError struct {
 	Failed map[int]error
 }
@@ -31,8 +32,8 @@ func (e *BatchError) Error() string {
 // time. Messages that fail to decode or validate, or that were delivered
 // more than WithMaxAttempts times, are settled without reaching h. With
 // automatic ack a nil error acks the whole batch, a *BatchError settles
-// only the listed messages as failed, and any other error fails every
-// message. Middleware does not apply to batch handlers.
+// only the listed messages as failed (also when found inside errors.Join or a
+// wrapper), and any other error fails every message. Middleware does not apply to batch handlers.
 func (a *App) ConsumeBatch(stream, consumer string, h BatchHandler, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindBatch, opts)
 	if err == nil && (stream == "" || consumer == "") {
@@ -162,6 +163,10 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 	}
 
 	err := r.call(ctx, ms, log)
+	// errors.As finds a non-nil *BatchError at any depth, so it settles only
+	// its listed indexes and acks the rest. It also reports a typed-nil one as
+	// be == nil, which would fail the whole batch; the check on the top-level
+	// value below is what lets a directly returned typed-nil mean success.
 	var be *BatchError
 	errors.As(err, &be)
 	if top, ok := err.(*BatchError); ok && top == nil {
