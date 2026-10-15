@@ -14,6 +14,7 @@ import (
 	natstest "github.com/nats-io/nats-server/v2/test"
 	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go/micro"
 )
 
 func TestEventOptionRejectsNil(t *testing.T) {
@@ -371,4 +372,49 @@ func TestEventAsyncIdempotencyComplete(t *testing.T) {
 			return e.Subject == "orders.x" && strings.HasPrefix(e.Err.Error(), "idempotency complete: ")
 		})
 	})
+}
+
+func TestEventHandlerStoppedNamesServiceEndpoints(t *testing.T) {
+	s := runServer(t)
+	onStopped, stopped := collect[HandlerEvent]()
+	a := newApp(t, s, WithOnHandlerStopped(onStopped))
+	svc := a.Service(micro.Config{Name: "inventory", Version: "1.0.0"})
+	h := TypedReply(func(_ context.Context, m *Msg[getReq]) (order, error) { return order{ID: m.Data.ID}, nil })
+	svc.Endpoint("get", h)
+	svc.Group("v2").Endpoint("list", h)
+	start(t, a)
+	var want []string
+	for _, st := range a.Health().Handlers {
+		want = append(want, st.Name)
+	}
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range stopped() {
+		if e.Kind != "endpoint" || e.Err != nil {
+			t.Fatalf("stopped = %+v", e)
+		}
+		got = append(got, e.Handler)
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	if len(want) != 2 || !slices.Equal(got, want) {
+		t.Fatalf("stopped = %v, health = %v", got, want)
+	}
+}
+
+func TestEventHandlerStoppedOnFailedStart(t *testing.T) {
+	s := runServer(t)
+	onStopped, stopped := collect[HandlerEvent]()
+	a := newApp(t, s, WithOnHandlerStopped(onStopped))
+	a.Subscribe("ok", Typed(nopOrder))
+	a.Subscribe("foo..bar", Typed(nopOrder))
+	if err := a.Start(context.Background()); err == nil {
+		t.Fatal("Start must fail")
+	}
+	es := stopped()
+	if len(es) != 1 || es[0].Handler != "ok" {
+		t.Fatalf("stopped = %+v", es)
+	}
 }

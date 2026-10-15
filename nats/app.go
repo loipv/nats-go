@@ -61,7 +61,8 @@ type App struct {
 // publishing is open and before any handler starts, so it can publish but no
 // handler has seen a message yet. If a later hook or a handler fails to start,
 // the hooks that already started are stopped in reverse and Start returns the
-// error. OnStop gets Shutdown's ctx, even when it has already expired, and
+// error, with their OnStop errors joined into it (each wrapped "nats: stop
+// hook i: <err>"). OnStop gets Shutdown's ctx, even when it has already expired, and
 // must honor it. A panic in either function is not recovered.
 type Hook struct {
 	OnStart func(ctx context.Context) error
@@ -158,10 +159,12 @@ func (a *App) UsePublish(mw ...PublishMiddleware) {
 
 // Hook registers lifecycle callbacks. Hooks start in registration order, after
 // publishing opens and before any handler starts, and stop in reverse order
-// once handlers have stopped, while publishing is still open. A failed Start
-// stops the hooks it started; Shutdown runs every OnStop once, joins their
-// errors and gives them its ctx, even when expired. A Hook with both functions
-// nil is a registration error. Panics are not recovered.
+// once handlers have stopped (or Shutdown's deadline passed), while publishing
+// is still open. A failed Start stops the hooks it started and joins their
+// OnStop errors into its error, each wrapped "nats: stop hook i: <err>".
+// Shutdown runs every OnStop once, joins their errors and gives them its ctx,
+// even when expired. A Hook with both functions nil is a registration error.
+// Panics are not recovered.
 func (a *App) Hook(h Hook) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -230,7 +233,7 @@ func (a *App) Start(ctx context.Context) error {
 		nc := a.nc
 		a.mu.Unlock()
 		hookErr := a.abandon(ctx, nc, runners, len(a.hooks))
-		err = errors.Join(errors.New("nats: start: cancelled by Shutdown"), hookErr)
+		err = joinHookErr(errors.New("nats: start: cancelled by Shutdown"), hookErr)
 		a.mu.Lock()
 	}
 	a.starting, a.abortStart = false, false
@@ -270,7 +273,7 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	var runners []runner
 	var started int
 	fail := func(err error) ([]runner, error) {
-		return nil, errors.Join(err, a.abandon(ctx, nc, runners, started))
+		return nil, joinHookErr(err, a.abandon(ctx, nc, runners, started))
 	}
 
 	// Resolve every consumer before any handler sees a message, so a failed
@@ -334,6 +337,18 @@ func (a *App) stopHooks(ctx context.Context, n int) error {
 	return errors.Join(errs...)
 }
 
+// joinHookErr joins hookErr to err only when there is one, so a plain error
+// keeps its type and errors.Unwrap result. A nil err yields hookErr.
+func joinHookErr(err, hookErr error) error {
+	switch {
+	case hookErr == nil:
+		return err
+	case err == nil:
+		return hookErr
+	}
+	return errors.Join(err, hookErr)
+}
+
 // abandon undoes a Start that failed or was cancelled after its handlers
 // began starting, and returns the errors of the hooks it stopped.
 func (a *App) abandon(ctx context.Context, nc *natsio.Conn, runners []runner, hooks int) error {
@@ -353,8 +368,14 @@ func (a *App) stopRunners(ctx context.Context, runners []runner) error {
 	for i, r := range runners {
 		wg.Go(func() {
 			errs[i] = r.stop(ctx)
-			st := r.status()
-			fire(a.opts.logger, a.opts.events.stopped, HandlerEvent{Handler: st.Name, Kind: st.Kind, Err: errs[i]})
+			// A service reports one event per endpoint, as Health does.
+			sts := []HandlerStatus{r.status()}
+			if m, ok := r.(interface{ statuses() []HandlerStatus }); ok {
+				sts = m.statuses()
+			}
+			for _, st := range sts {
+				fire(a.opts.logger, a.opts.events.stopped, HandlerEvent{Handler: st.Name, Kind: st.Kind, Err: errs[i]})
+			}
 		})
 	}
 	wg.Wait()
@@ -427,16 +448,16 @@ func (a *App) shutdown(ctx context.Context) error {
 		if err := a.nc.Drain(); err == nil {
 			select {
 			case <-a.closed:
-				return errors.Join(stopErr, hookErr)
+				return joinHookErr(stopErr, hookErr)
 			case <-ctx.Done():
 			}
 		}
 	}
 	a.nc.Close()
 	if err := ctx.Err(); err != nil {
-		return errors.Join(fmt.Errorf("nats: shutdown: %w", err), hookErr)
+		return joinHookErr(fmt.Errorf("nats: shutdown: %w", err), hookErr)
 	}
-	return errors.Join(stopErr, hookErr)
+	return joinHookErr(stopErr, hookErr)
 }
 
 // Run calls Start, blocks until ctx is cancelled or the connection is closed

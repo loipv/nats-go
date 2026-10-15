@@ -619,3 +619,15 @@ func TestHookRegistration(t *testing.T) {
 		t.Fatalf("late hook was called: %v", got)
 	}
 }
+
+func TestStartFailureWithoutHooksKeepsCause(t *testing.T) {
+	a := newApp(t, runServer(t))
+	a.Subscribe("foo..bar", Typed(func(context.Context, *Msg[[]byte]) error { return nil }))
+	err := a.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start must fail")
+	}
+	if _, ok := err.(interface{ Unwrap() []error }); ok {
+		t.Fatalf("error is wrapped in a join: %v", err)
+	}
+}
