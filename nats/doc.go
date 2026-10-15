@@ -68,10 +68,9 @@
 // panic in one is recovered and logged. Callbacks passed in WithNATSOptions
 // are chained: the user's runs first, then the library's. Without a user
 // ErrorHandler, nats.go's async errors are logged through the App's logger.
-// Shutdown returns
-// after OnClosed ran when it drains within its deadline; on a deadline, and
-// after a failed Start, the connection events may arrive after the call
-// returns.
+// Shutdown returns after OnClosed ran when it drains within its deadline; on a
+// deadline, and after a failed Start, the connection events may arrive after
+// the call returns.
 //
 // # Handlers
 //

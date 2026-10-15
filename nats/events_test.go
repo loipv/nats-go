@@ -571,17 +571,26 @@ func TestEventConsumeBatchRetryThenDeadLettered(t *testing.T) {
 	a := newApp(t, s, WithOnRetry(onRetry), WithOnDeadLettered(onDLQ))
 	setupStream(t, a)
 	setupDLQ(t, a)
-	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error {
-		return errors.New("db down")
+	errBad := errors.New("bad row")
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(_ context.Context, ms []*Msg[order]) error {
+		be := &BatchError{Failed: map[int]error{}}
+		for i, m := range ms {
+			if m.Data.ID == "bad" {
+				be.Failed[i] = errBad
+			}
+		}
+		return be
 	}), WithBatchWait(100*time.Millisecond), WithMaxAttempts(2), fast, WithDLQ("dlq.orders"))
 	start(t, a)
-	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
-	waitFor(t, func() bool { return len(dead()) == 1 })
+	_, _ = a.PublishJS(context.Background(), "orders.bad", order{ID: "bad"})
+	_, _ = a.PublishJS(context.Background(), "orders.ok", order{ID: "ok"})
+	waitFor(t, func() bool { return len(dead()) == 1 && pendingAcks(t, a, "billing") == 0 })
+	// Only the listed message gets events; the other one is acked.
 	rs := retries()
-	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "ORDERS/billing" || rs[0].Subject != "orders.x" {
+	if len(rs) != 1 || rs[0].Attempt != 1 || rs[0].Handler != "ORDERS/billing" || rs[0].Subject != "orders.bad" || !errors.Is(rs[0].Err, errBad) {
 		t.Fatalf("retries = %+v", rs)
 	}
-	if d := dead()[0]; d.Attempt != 2 || d.Handler != "ORDERS/billing" || d.Err == nil || d.Err.Error() != "db down" {
+	if d := dead()[0]; d.Attempt != 2 || d.Handler != "ORDERS/billing" || d.Subject != "orders.bad" || !errors.Is(d.Err, errBad) {
 		t.Fatalf("dead-lettered = %+v", d)
 	}
 }
