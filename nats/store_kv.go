@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -12,9 +13,11 @@ import (
 )
 
 // KVStore is a JetStream key-value backed IdempotencyStore that is correct
-// across instances. Start creates or updates the bucket; it needs nats-server
-// 2.11 or later for per-key TTLs. Using it before Start returns ErrNotRunning.
+// across instances. A start hook creates or updates the bucket; it needs
+// nats-server 2.11 or later for per-key TTLs. Using it before Start returns
+// ErrNotRunning.
 type KVStore struct {
+	app    *App
 	bucket string
 	kv     atomic.Pointer[jetstream.KeyValue]
 }
@@ -24,18 +27,22 @@ type KVStore struct {
 // least one second, so every TTL passed to Begin and Complete is rounded up to
 // the next whole second (500ms becomes 1s, 1.2s becomes 2s).
 func NewKVStore(app *App, bucket string) *KVStore {
-	s := &KVStore{bucket: bucket}
+	s := &KVStore{app: app, bucket: bucket}
 	if bucket == "" {
 		app.addErr(errors.New("nats: kv store: empty bucket"))
 		return s
 	}
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	if app.lateLocked() {
-		return s
-	}
-	app.kvStores = append(app.kvStores, s)
+	app.Hook(Hook{OnStart: s.provision})
 	return s
+}
+
+func (s *KVStore) provision(ctx context.Context) error {
+	kv, err := s.app.JetStream().CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: s.bucket, History: 1, LimitMarkerTTL: time.Minute})
+	if err != nil {
+		return fmt.Errorf("nats: sync kv bucket %q: %w", s.bucket, err)
+	}
+	s.kv.Store(&kv)
+	return nil
 }
 
 func (s *KVStore) keys(key string) (claim, done string, kv jetstream.KeyValue, err error) {

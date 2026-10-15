@@ -30,7 +30,6 @@ type App struct {
 	regs        []registration
 	streams     []jetstream.StreamConfig
 	consumers   []consumerDecl
-	kvStores    []*KVStore
 	consumeKeys map[string]bool
 	mws         []Middleware
 	hooks       []Hook
