@@ -105,7 +105,8 @@ type runner interface {
 	status() HandlerStatus
 }
 
-// New creates an App. It performs no I/O.
+// New creates an App. It does not connect; WithNKeyFromSeed reads its seed
+// file here.
 func New(opts ...Option) (*App, error) {
 	o := defaultOptions()
 	for _, opt := range opts {

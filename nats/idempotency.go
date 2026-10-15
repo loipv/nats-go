@@ -48,6 +48,15 @@ func WithDoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig)
 // handler. Workers recognise it: a duplicate JetStream message is acked (with
 // WithManualAck too), a duplicate request gets a 400 response, and a duplicate is
 // never retried, dead-lettered or logged as a failure.
+//
+// A key claimed by another delivery fails with ErrInProgress, which is
+// retried like any other error. On JetStream every such nak is a delivery
+// that counts toward WithMaxAttempts: with a limit and a DLQ, a copy whose
+// twin is still being handled after all its retries is dead-lettered, even
+// though the twin then succeeds. Keep handlers within AckWait (see
+// WithAutoInProgress) and leave enough attempts and backoff for the
+// slowest handler.
+//
 // It panics if store is nil or a TTL is not positive.
 func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 	c := idemConfig{
