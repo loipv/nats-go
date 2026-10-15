@@ -80,6 +80,7 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 	rc := r.cfg.retry(r.kind)
 	stopping := make(chan struct{})
 	p := newPool(r.cfg.concurrency, func(ctx context.Context, m *RawMsg) {
+		ctx = withLogger(ctx, log)
 		if r.kind == kindReply && m.Reply == "" {
 			log.Warn("nats: request without reply subject dropped", "subject", m.Subject)
 			return

@@ -1,8 +1,12 @@
 package nats
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -113,4 +117,51 @@ func TestIdempotentPanicsOnInvalid(t *testing.T) {
 		}
 	}()
 	Idempotent(nil)
+}
+
+func TestIdempotentReleasesClaimOnPanic(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	a.Use(Recover(), Idempotent(NewMemoryStore()))
+	var calls atomic.Int32
+	Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return nil
+	}, fast, MaxAttempts(3))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("p-1"))
+	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
+}
+
+// completeFails is a store whose Complete always fails.
+type completeFails struct{ IdempotencyStore }
+
+func (completeFails) Complete(context.Context, string, time.Duration) error {
+	return errors.New("store down")
+}
+
+// syncBuf is a bytes.Buffer safe for concurrent log writes and test reads.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestIdempotentLogsToAppLogger(t *testing.T) {
+	s := runServer(t)
+	var buf syncBuf
+	a := newApp(t, s, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	setupStream(t, a)
+	a.Use(Idempotent(completeFails{NewMemoryStore()}))
+	var calls atomic.Int32
+	Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error { calls.Add(1); return nil })
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, MsgID("l-1"))
+	waitFor(t, func() bool { return calls.Load() == 1 && pendingAcks(t, a, "billing") == 0 })
+	waitFor(t, func() bool { return strings.Contains(buf.String(), "idempotency complete failed") })
 }

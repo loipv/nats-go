@@ -3,7 +3,6 @@ package nats
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 )
 
@@ -70,15 +69,26 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 				}
 				return err
 			}
-			if err := next(ctx, m); err != nil {
-				// The claim must go even if ctx is already cancelled, or the retry sees ErrInProgress.
+			// abort releases the claim even if ctx is already cancelled, or the retry sees ErrInProgress.
+			abort := func() {
 				if aerr := store.Abort(context.WithoutCancel(ctx), key); aerr != nil {
-					slog.ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
+					loggerFrom(ctx).ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
 				}
+			}
+			defer func() {
+				// A panic is a failure too: release the claim, then let it propagate to Recover.
+				if r := recover(); r != nil {
+					abort()
+					panic(r)
+				}
+			}()
+			err := next(ctx, m)
+			if err != nil {
+				abort()
 				return err
 			}
 			if err := store.Complete(context.WithoutCancel(ctx), key, c.doneTTL); err != nil {
-				slog.ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
+				loggerFrom(ctx).ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
 			}
 			return nil
 		}

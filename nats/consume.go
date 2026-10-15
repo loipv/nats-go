@@ -145,6 +145,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
 	rc := r.cfg.retry(r.kind)
 	rn.pool = newPool(r.cfg.concurrency, func(ctx context.Context, raw *RawMsg) {
+		ctx = withLogger(ctx, log)
 		if r.kind == kindOrdered {
 			// Retries hold the worker, so the stream waits and stays in order.
 			src := dlqSource{stream: r.stream}

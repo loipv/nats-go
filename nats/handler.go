@@ -325,6 +325,21 @@ func attemptFrom(ctx context.Context) int {
 	return 1
 }
 
+type loggerKey struct{}
+
+// withLogger stores the worker's logger in ctx for middleware to use.
+func withLogger(ctx context.Context, l *slog.Logger) context.Context {
+	return context.WithValue(ctx, loggerKey{}, l)
+}
+
+// loggerFrom returns the logger stored in ctx, else slog.Default().
+func loggerFrom(ctx context.Context) *slog.Logger {
+	if l, ok := ctx.Value(loggerKey{}).(*slog.Logger); ok {
+		return l
+	}
+	return slog.Default()
+}
+
 // safeCall runs h and turns a panic into an error, so a faulty handler
 // cannot crash the worker goroutine and the process with it.
 func safeCall(ctx context.Context, h Handler, m *RawMsg, log *slog.Logger) (err error) {
