@@ -63,7 +63,7 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			log.Warn("nats: request without reply subject dropped", "subject", m.Subject)
 			return
 		}
-		err := h(ctx, m)
+		err := safeCall(ctx, h, m, log)
 		if err == nil {
 			return
 		}

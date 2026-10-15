@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -19,8 +21,13 @@ type Msg[T any] struct {
 	// Raw is the undecoded message.
 	Raw *RawMsg
 
-	js jetstream.Msg
+	js      jetstream.Msg
+	attempt int
 }
+
+// Attempt returns the 1-based delivery attempt of the message: the JetStream
+// delivery count, or 1 for core messages.
+func (m *Msg[T]) Attempt() int { return m.attempt }
 
 func (m *Msg[T]) jsMsg() (jetstream.Msg, error) {
 	if m.js == nil {
@@ -263,7 +270,7 @@ func typed[T any](c Codec, fn func(context.Context, *Msg[T]) error) Handler {
 				return Terminal(fmt.Errorf("nats: validate: %w", err))
 			}
 		}
-		return fn(ctx, &Msg[T]{Subject: raw.Subject, Header: raw.Header, Data: data, Raw: raw, js: jsMsgFrom(ctx)})
+		return fn(ctx, &Msg[T]{Subject: raw.Subject, Header: raw.Header, Data: data, Raw: raw, js: jsMsgFrom(ctx), attempt: attemptFrom(ctx)})
 	}
 }
 
@@ -296,6 +303,38 @@ func withJSMsg(ctx context.Context, m jetstream.Msg) context.Context {
 func jsMsgFrom(ctx context.Context) jetstream.Msg {
 	m, _ := ctx.Value(jsMsgKey{}).(jetstream.Msg)
 	return m
+}
+
+type attemptKey struct{}
+
+func withAttempt(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, attemptKey{}, n)
+}
+
+// attemptFrom returns the attempt stored in ctx, else the JetStream delivery
+// count, else 1.
+func attemptFrom(ctx context.Context) int {
+	if n, ok := ctx.Value(attemptKey{}).(int); ok {
+		return n
+	}
+	if m := jsMsgFrom(ctx); m != nil {
+		if md, err := m.Metadata(); err == nil {
+			return int(md.NumDelivered)
+		}
+	}
+	return 1
+}
+
+// safeCall runs h and turns a panic into an error, so a faulty handler
+// cannot crash the worker goroutine and the process with it.
+func safeCall(ctx context.Context, h Handler, m *RawMsg, log *slog.Logger) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("nats: handler panicked", "subject", m.Subject, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("nats: panic: %v", r)
+		}
+	}()
+	return h(ctx, m)
 }
 
 func toRaw(m jetstream.Msg) *RawMsg {

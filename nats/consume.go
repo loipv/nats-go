@@ -112,7 +112,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	log := a.opts.logger.With("handler", rn.name, "kind", r.kind)
 	manual := r.cfg.manualAck || r.kind == kindOrdered
 	rn.pool = newPool(r.cfg.concurrency, func(ctx context.Context, raw *RawMsg) {
-		err := h(ctx, raw)
+		err := safeCall(ctx, h, raw, log)
 		if err != nil {
 			log.Error("nats: handler failed", "subject", raw.Subject, "error", err)
 		}
