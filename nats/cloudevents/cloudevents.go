@@ -199,11 +199,11 @@ func Handle[T any](e *Emitter, eventType string, fn func(context.Context, Event,
 	if eventType != "" {
 		subject = e.Subject(eventType)
 	}
-	nats.Subscribe(e.app, subject, func(ctx context.Context, m *nats.Msg[T]) error {
+	e.app.Subscribe(subject, nats.Typed(func(ctx context.Context, m *nats.Msg[T]) error {
 		ev, err := FromHeader(m.Header)
 		if err != nil {
 			return nats.Terminal(err)
 		}
 		return fn(ctx, ev, m)
-	}, opts...)
+	}), opts...)
 }

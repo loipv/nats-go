@@ -44,14 +44,14 @@ func main() {
 
 	// JetStream: up to 3 deliveries, 200ms then 400ms between them (with
 	// jitter), then the message goes to dlq.payments and is termed.
-	nats.Consume(app, "PAYMENTS", "charger", func(_ context.Context, m *nats.Msg[Payment]) error {
+	app.Consume("PAYMENTS", "charger", nats.Typed(func(_ context.Context, m *nats.Msg[Payment]) error {
 		fmt.Printf("charger: %s attempt %d\n", m.Data.ID, m.Attempt())
 		if m.Data.FailUntil > 0 && m.Attempt() >= m.Data.FailUntil {
 			fmt.Printf("charger: %s charged\n", m.Data.ID)
 			return nil
 		}
 		return errors.New("card gateway unavailable")
-	},
+	}),
 		nats.MaxAttempts(3),
 		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, 2*time.Second)),
 		nats.DLQ("dlq.payments"),
@@ -59,10 +59,10 @@ func main() {
 
 	// Core NATS never redelivers, so the library retries in the worker:
 	// 2 attempts, then the message goes to dlq.notify.
-	nats.Subscribe(app, "notify.send", func(_ context.Context, m *nats.Msg[Payment]) error {
+	app.Subscribe("notify.send", nats.Typed(func(_ context.Context, m *nats.Msg[Payment]) error {
 		fmt.Printf("notifier: %s attempt %d\n", m.Data.ID, m.Attempt())
 		return errors.New("mail server down")
-	},
+	}),
 		nats.MaxAttempts(2),
 		nats.WithBackoff(nats.ExponentialBackoff(200*time.Millisecond, 2*time.Second)),
 		nats.DLQ("dlq.notify"),
@@ -72,7 +72,7 @@ func main() {
 	var mu sync.Mutex
 	var dead []string
 	deadLettered := make(chan struct{}, 2)
-	nats.ConsumeOrdered(app, "DLQ", func(_ context.Context, m *nats.Msg[Payment]) error {
+	app.ConsumeOrdered("DLQ", nats.Typed(func(_ context.Context, m *nats.Msg[Payment]) error {
 		var b strings.Builder
 		fmt.Fprintf(&b, "dlq: %s\n", m.Data.ID)
 		var keys []string
@@ -90,7 +90,7 @@ func main() {
 		mu.Unlock()
 		deadLettered <- struct{}{}
 		return nil
-	}, nats.DeliverPolicy(jetstream.DeliverNewPolicy))
+	}), nats.DeliverPolicy(jetstream.DeliverNewPolicy))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

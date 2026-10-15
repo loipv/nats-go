@@ -11,12 +11,12 @@ func TestShutdownWaitsForInflight(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	started, finished := make(chan struct{}), make(chan struct{})
-	Subscribe(a, "slow", func(context.Context, *Msg[[]byte]) error {
+	a.Subscribe("slow", Typed(func(context.Context, *Msg[[]byte]) error {
 		close(started)
 		time.Sleep(200 * time.Millisecond)
 		close(finished)
 		return nil
-	})
+	}))
 	start(t, a)
 	_ = a.Conn().Publish("slow", nil)
 	<-started
@@ -35,11 +35,11 @@ func TestShutdownDeadlineExceeded(t *testing.T) {
 	a := newApp(t, s)
 	started, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
-	Subscribe(a, "stuck", func(context.Context, *Msg[[]byte]) error {
+	a.Subscribe("stuck", Typed(func(context.Context, *Msg[[]byte]) error {
 		close(started)
 		<-release
 		return nil
-	})
+	}))
 	start(t, a)
 	_ = a.Conn().Publish("stuck", nil)
 	<-started

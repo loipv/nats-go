@@ -266,6 +266,51 @@ func BatchWait(d time.Duration) HandlerOption {
 	return func(c *handlerConfig) { c.batchWait = d; c.used = append(c.used, "BatchWait") }
 }
 
+// MsgHandler is a typed message handler for App.Subscribe, App.Consume and
+// App.ConsumeOrdered. Create it with Typed; the zero value is rejected by
+// Start.
+type MsgHandler struct{ bind func(Codec) Handler }
+
+// Typed wraps fn for App.Subscribe, App.Consume and App.ConsumeOrdered. The
+// payload is decoded into T with the app codec (T = []byte skips decoding)
+// and validated when T has a Validate() error method.
+func Typed[T any](fn func(context.Context, *Msg[T]) error) MsgHandler {
+	if fn == nil {
+		return MsgHandler{}
+	}
+	return MsgHandler{bind: func(c Codec) Handler { return typed(c, fn) }}
+}
+
+// ReplyHandler is a typed responder for App.Reply and service endpoints.
+// Create it with TypedReply; the zero value is rejected by Start.
+type ReplyHandler struct{ bind func(Codec) Handler }
+
+// TypedReply wraps fn for App.Reply and service endpoints. The request is
+// decoded into Req and the returned Resp is encoded with the app codec.
+func TypedReply[Req, Resp any](fn func(context.Context, *Msg[Req]) (Resp, error)) ReplyHandler {
+	if fn == nil {
+		return ReplyHandler{}
+	}
+	return ReplyHandler{bind: func(c Codec) Handler { return replyHandler(c, fn) }}
+}
+
+// BatchHandler is a typed batch handler for App.ConsumeBatch. Create it with
+// TypedBatch; the zero value is rejected by Start.
+type BatchHandler struct {
+	reg func(jsReg, Codec) registration
+}
+
+// TypedBatch wraps fn for App.ConsumeBatch. Every message is decoded into T
+// with the app codec before fn is called.
+func TypedBatch[T any](fn func(context.Context, []*Msg[T]) error) BatchHandler {
+	if fn == nil {
+		return BatchHandler{}
+	}
+	return BatchHandler{reg: func(j jsReg, c Codec) registration {
+		return &batchReg[T]{jsReg: j, codec: c, fn: fn}
+	}}
+}
+
 // typed adapts a typed handler to a raw Handler: decode, validate, call.
 func typed[T any](c Codec, fn func(context.Context, *Msg[T]) error) Handler {
 	return func(ctx context.Context, raw *RawMsg) error {

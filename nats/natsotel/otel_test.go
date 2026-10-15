@@ -109,7 +109,7 @@ func TestTracePropagatesProducerToConsumer(t *testing.T) {
 	a.Use(natsotel.Middleware(opts...))
 	a.UsePublish(natsotel.PublishMiddleware(opts...))
 	done := make(chan struct{})
-	nats.Subscribe(a, "orders.created", func(context.Context, *nats.Msg[int]) error { close(done); return nil })
+	a.Subscribe("orders.created", nats.Typed(func(context.Context, *nats.Msg[int]) error { close(done); return nil }))
 	testutil.Start(t, a)
 	_ = a.Publish(context.Background(), "orders.created", 1, nats.WithHeader(nats.Header{"Nats-Msg-Id": []string{"m1"}}))
 	testutil.Recv(t, done)

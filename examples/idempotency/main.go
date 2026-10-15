@@ -49,11 +49,11 @@ func main() {
 	)
 
 	var handled atomic.Int32
-	nats.Consume(app, "INVOICES", "mailer", func(_ context.Context, m *nats.Msg[Order]) error {
+	app.Consume("INVOICES", "mailer", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
 		fmt.Printf("sending invoice for order %s\n", m.Data.ID)
 		handled.Add(1)
 		return nil
-	})
+	}))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

@@ -43,11 +43,11 @@ func TestIdempotentAcrossInstancesKV(t *testing.T) {
 		a := newApp(t, s)
 		setupStream(t, a)
 		a.Use(Idempotent(NewKVStore(a, "IDEM"), IdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
-		Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error {
+		a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error {
 			calls.Add(1)
 			time.Sleep(50 * time.Millisecond)
 			return nil
-		}, fast)
+		}), fast)
 		start(t, a)
 		apps = append(apps, a)
 	}

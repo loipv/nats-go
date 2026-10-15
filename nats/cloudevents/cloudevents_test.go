@@ -191,7 +191,7 @@ func TestWithHeaderMergeLibWins(t *testing.T) {
 	a := newApp(t, s.ClientURL())
 	ev := cloudevents.New(a, "src")
 	hdr := make(chan nats.Header, 1)
-	nats.Subscribe(a, "events.h", func(_ context.Context, m *nats.Msg[[]byte]) error { hdr <- m.Header; return nil })
+	a.Subscribe("events.h", nats.Typed(func(_ context.Context, m *nats.Msg[[]byte]) error { hdr <- m.Header; return nil }))
 	start(t, a)
 	err := ev.Publish(context.Background(), "h", 1, cloudevents.WithHeader(nats.Header{"X-Trace": {"t1"}, "ce-source": {"evil"}}))
 	if err != nil {

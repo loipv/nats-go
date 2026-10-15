@@ -12,7 +12,7 @@ func TestSubscribeWildcard(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	got := make(chan string, 2)
-	Subscribe(a, "orders.*", func(_ context.Context, m *Msg[[]byte]) error { got <- m.Subject; return nil })
+	a.Subscribe("orders.*", Typed(func(_ context.Context, m *Msg[[]byte]) error { got <- m.Subject; return nil }))
 	start(t, a)
 	_ = a.Conn().Publish("orders.created", nil)
 	_ = a.Conn().Publish("orders.eu.created", nil)
@@ -27,7 +27,7 @@ func TestSubscribeQueueGroupDeliversOnce(t *testing.T) {
 	var n atomic.Int32
 	for range 2 {
 		a := newApp(t, s)
-		Subscribe(a, "jobs", func(context.Context, *Msg[[]byte]) error { n.Add(1); return nil }, Queue("w"))
+		a.Subscribe("jobs", Typed(func(context.Context, *Msg[[]byte]) error { n.Add(1); return nil }), Queue("w"))
 		start(t, a)
 	}
 	pub := newApp(t, s)
@@ -45,7 +45,7 @@ func TestSubscribeQueueGroupDeliversOnce(t *testing.T) {
 func TestReplyRespondsAndMapsErrors(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
-	Reply(a, "math.double", func(_ context.Context, m *Msg[int]) (int, error) {
+	a.Reply("math.double", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Data < 0 {
 			return 0, Terminal(errors.New("negative"))
 		}
@@ -53,7 +53,7 @@ func TestReplyRespondsAndMapsErrors(t *testing.T) {
 			return 0, errors.New("boom")
 		}
 		return m.Data * 2, nil
-	})
+	}))
 	start(t, a)
 	r, err := a.Conn().Request("math.double", []byte("21"), time.Second)
 	if err != nil || string(r.Data) != "42" {
@@ -73,11 +73,11 @@ func TestSubscribeTimeoutSetsDeadline(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	got := make(chan bool, 1)
-	Subscribe(a, "t", func(ctx context.Context, _ *Msg[[]byte]) error {
+	a.Subscribe("t", Typed(func(ctx context.Context, _ *Msg[[]byte]) error {
 		_, ok := ctx.Deadline()
 		got <- ok
 		return nil
-	}, Timeout(time.Second))
+	}), Timeout(time.Second))
 	start(t, a)
 	_ = a.Conn().Publish("t", nil)
 	if !recv(t, got) {
@@ -88,7 +88,7 @@ func TestSubscribeTimeoutSetsDeadline(t *testing.T) {
 func TestInvalidSubjectFailsStart(t *testing.T) {
 	for _, subj := range []string{"", "foo..bar"} {
 		a := newApp(t, runServer(t))
-		Subscribe(a, subj, func(context.Context, *Msg[[]byte]) error { return nil })
+		a.Subscribe(subj, Typed(func(context.Context, *Msg[[]byte]) error { return nil }))
 		if err := a.Start(context.Background()); err == nil {
 			t.Fatalf("subject %q must fail Start", subj)
 		}
@@ -102,7 +102,7 @@ func TestReplyPanicWithRecoverSendsSingleLineError(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	a.Use(Recover())
-	Reply(a, "boom", func(context.Context, *Msg[int]) (int, error) { panic("kaboom") })
+	a.Reply("boom", TypedReply(func(context.Context, *Msg[int]) (int, error) { panic("kaboom") }))
 	start(t, a)
 	r, err := a.Conn().Request("boom", []byte("1"), time.Second)
 	if err != nil {

@@ -22,13 +22,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	nats.Reply(app, "math.double", func(_ context.Context, m *nats.Msg[int]) (int, error) {
+	app.Reply("math.double", nats.TypedReply(func(_ context.Context, m *nats.Msg[int]) (int, error) {
 		if m.Data < 0 {
 			// Terminal errors reach the caller with code 400, others with 500.
 			return 0, nats.Terminal(errors.New("negative input"))
 		}
 		return m.Data * 2, nil
-	})
+	}))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

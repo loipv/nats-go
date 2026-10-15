@@ -41,18 +41,18 @@ func main() {
 	wg.Add(2)
 
 	// Automatic ack: nil acks, nats.Terminal(err) terms, other errors nak.
-	nats.Consume(app, "ORDERS", "billing", func(_ context.Context, m *nats.Msg[Order]) error {
+	app.Consume("ORDERS", "billing", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
 		defer wg.Done()
 		fmt.Printf("billing: charged %d for order %s\n", m.Data.Amount, m.Data.ID)
 		return nil
-	})
+	}))
 
 	// Manual ack: the handler decides.
-	nats.Consume(app, "ORDERS", "audit", func(_ context.Context, m *nats.Msg[Order]) error {
+	app.Consume("ORDERS", "audit", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
 		defer wg.Done()
 		fmt.Printf("audit: recorded order %s\n", m.Data.ID)
 		return m.Ack()
-	}, nats.ManualAck())
+	}), nats.ManualAck())
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

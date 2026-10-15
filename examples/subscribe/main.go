@@ -30,11 +30,11 @@ func main() {
 	// "orders.*" matches exactly one token after "orders.". Every instance
 	// started with the same Queue group shares the load: each message goes
 	// to one of them. Concurrency(4) runs up to 4 handler calls in parallel.
-	nats.Subscribe(app, "orders.*", func(_ context.Context, m *nats.Msg[Order]) error {
+	app.Subscribe("orders.*", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
 		defer wg.Done()
 		fmt.Printf("received %s: order %s\n", m.Subject, m.Data.ID)
 		return nil
-	}, nats.Queue("workers"), nats.Concurrency(4))
+	}), nats.Queue("workers"), nats.Concurrency(4))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

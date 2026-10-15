@@ -48,17 +48,17 @@ func main() {
 	}
 
 	greeted, crashed := make(chan struct{}), make(chan struct{})
-	nats.Subscribe(app, "greet", func(_ context.Context, m *nats.Msg[string]) error {
+	app.Subscribe("greet", nats.Typed(func(_ context.Context, m *nats.Msg[string]) error {
 		defer close(greeted)
 		fmt.Printf("hello %s (request id %s)\n", m.Data, m.Header.Get("X-Request-Id"))
 		return nil
-	}, nats.With(timing))
+	}), nats.With(timing))
 
 	// Recover turns this panic into an error; the subscription keeps running.
-	nats.Subscribe(app, "crash", func(context.Context, *nats.Msg[[]byte]) error {
+	app.Subscribe("crash", nats.Typed(func(context.Context, *nats.Msg[[]byte]) error {
 		defer close(crashed)
 		panic("something went wrong")
-	})
+	}))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

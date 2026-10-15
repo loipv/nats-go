@@ -17,11 +17,11 @@ func TestShutdownDeadlineWithQueuedMessageCore(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	started := make(chan struct{}, 2)
-	Subscribe(a, "block", func(ctx context.Context, _ *Msg[[]byte]) error {
+	a.Subscribe("block", Typed(func(ctx context.Context, _ *Msg[[]byte]) error {
 		started <- struct{}{}
 		<-ctx.Done()
 		return ctx.Err()
-	})
+	}))
 	start(t, a)
 	_ = a.Conn().Publish("block", nil)
 	_ = a.Conn().Publish("block", nil)
@@ -35,11 +35,11 @@ func TestShutdownDeadlineWithQueuedMessageJS(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	started := make(chan struct{}, 2)
-	Consume(a, "ORDERS", "billing", func(ctx context.Context, _ *Msg[order]) error {
+	a.Consume("ORDERS", "billing", Typed(func(ctx context.Context, _ *Msg[order]) error {
 		started <- struct{}{}
 		<-ctx.Done()
 		return ctx.Err()
-	})
+	}))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "2"})
@@ -80,7 +80,7 @@ func TestOrderedConsumerRecoversAfterDelete(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	got := make(chan string, 4)
-	ConsumeOrdered(a, "ORDERS", func(_ context.Context, m *Msg[order]) error { got <- m.Data.ID; return nil })
+	a.ConsumeOrdered("ORDERS", Typed(func(_ context.Context, m *Msg[order]) error { got <- m.Data.ID; return nil }))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "before"})
 	recv(t, got)
@@ -105,10 +105,10 @@ func TestOrderedConsumerRecoversAfterDelete(t *testing.T) {
 func TestFailedStartHandlesNothing(t *testing.T) {
 	cases := map[string]func(a *App){
 		"missing consumer": func(a *App) {
-			Consume(a, "ORDERS", "nope", func(context.Context, *Msg[order]) error { return nil })
+			a.Consume("ORDERS", "nope", Typed(func(context.Context, *Msg[order]) error { return nil }))
 		},
 		"bad subject": func(a *App) {
-			Subscribe(a, "foo..bar", func(context.Context, *Msg[[]byte]) error { return nil })
+			a.Subscribe("foo..bar", Typed(func(context.Context, *Msg[[]byte]) error { return nil }))
 		},
 	}
 	for name, addFailing := range cases {
@@ -121,7 +121,7 @@ func TestFailedStartHandlesNothing(t *testing.T) {
 
 			a := newApp(t, s)
 			var calls atomic.Int32
-			Consume(a, "ORDERS", "billing", func(context.Context, *Msg[order]) error { calls.Add(1); return nil })
+			a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { calls.Add(1); return nil }))
 			addFailing(a)
 			if err := a.Start(context.Background()); err == nil {
 				t.Fatal("Start must fail")
@@ -146,18 +146,18 @@ func TestHandlerCanPublishDuringStartup(t *testing.T) {
 	a := newApp(t, s)
 	var failed atomic.Int32
 	var handled atomic.Int32
-	Consume(a, "ORDERS", "billing", func(ctx context.Context, _ *Msg[order]) error {
+	a.Consume("ORDERS", "billing", Typed(func(ctx context.Context, _ *Msg[order]) error {
 		if err := a.Publish(ctx, "audit", nil); err != nil {
 			failed.Add(1)
 		}
 		handled.Add(1)
 		return nil
-	})
+	}))
 	// More registrations keep Start busy after billing has begun receiving.
 	for i := range 10 {
 		name := fmt.Sprintf("extra%d", i)
 		a.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: name, AckPolicy: jetstream.AckExplicitPolicy})
-		Consume(a, "ORDERS", name, func(context.Context, *Msg[order]) error { return nil })
+		a.Consume("ORDERS", name, Typed(func(context.Context, *Msg[order]) error { return nil }))
 	}
 	start(t, a)
 	waitFor(t, func() bool { return handled.Load() == 20 })

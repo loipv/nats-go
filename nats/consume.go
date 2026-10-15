@@ -19,19 +19,22 @@ import (
 // Push consumers should set IdleHeartbeat in their ConsumerConfig: without
 // it a deleted push consumer cannot be detected, so the handler is not
 // restarted.
-func Consume[T any](app *App, stream, consumer string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
+func (a *App) Consume(stream, consumer string, h MsgHandler, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindConsume, opts)
 	if err == nil && (stream == "" || consumer == "") {
 		err = errors.New("nats: consume: stream and consumer are required")
 	}
-	if err == nil && !app.claimConsumer(stream+"/"+consumer) {
+	if err == nil && h.bind == nil {
+		err = fmt.Errorf("nats: consume %s/%s: nil handler", stream, consumer)
+	}
+	if err == nil && !a.claimConsumer(stream+"/"+consumer) {
 		err = fmt.Errorf("nats: duplicate consumer %s/%s", stream, consumer)
 	}
 	if err != nil {
-		app.addErr(err)
+		a.addErr(err)
 		return
 	}
-	app.register(&jsReg{kind: kindConsume, stream: stream, consumer: consumer, cfg: cfg, h: typed(app.opts.codec, fn)})
+	a.register(&jsReg{kind: kindConsume, stream: stream, consumer: consumer, cfg: cfg, h: h.bind(a.opts.codec)})
 }
 
 // ConsumeOrdered registers fn on an ephemeral ordered consumer of stream.
@@ -40,16 +43,19 @@ func Consume[T any](app *App, stream, consumer string, fn func(context.Context, 
 // A failed message is not retried by default. MaxAttempts, WithBackoff and
 // DLQ retry it in process; the whole stream waits while a message is retried,
 // which keeps the order. Unlimited can stall the stream while failures last.
-func ConsumeOrdered[T any](app *App, stream string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
+func (a *App) ConsumeOrdered(stream string, h MsgHandler, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindOrdered, opts)
 	if err == nil && stream == "" {
 		err = errors.New("nats: consume ordered: stream is required")
 	}
+	if err == nil && h.bind == nil {
+		err = fmt.Errorf("nats: consume ordered %s: nil handler", stream)
+	}
 	if err != nil {
-		app.addErr(err)
+		a.addErr(err)
 		return
 	}
-	app.register(&jsReg{kind: kindOrdered, stream: stream, cfg: cfg, h: typed(app.opts.codec, fn)})
+	a.register(&jsReg{kind: kindOrdered, stream: stream, cfg: cfg, h: h.bind(a.opts.codec)})
 }
 
 func (a *App) claimConsumer(key string) bool {

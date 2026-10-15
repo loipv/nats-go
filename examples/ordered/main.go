@@ -31,11 +31,11 @@ func main() {
 	wg.Add(2)
 	// Ordered consumers never ack. DeliverNewPolicy skips history from
 	// earlier runs; use DeliverAllPolicy to replay the whole stream.
-	nats.ConsumeOrdered(app, "EVENTS", func(_ context.Context, m *nats.Msg[Event]) error {
+	app.ConsumeOrdered("EVENTS", nats.Typed(func(_ context.Context, m *nats.Msg[Event]) error {
 		defer wg.Done()
 		fmt.Printf("%s: %s\n", m.Subject, m.Data.Name)
 		return nil
-	}, nats.FilterSubjects("events.eu.>"), nats.DeliverPolicy(jetstream.DeliverNewPolicy))
+	}), nats.FilterSubjects("events.eu.>"), nats.DeliverPolicy(jetstream.DeliverNewPolicy))
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

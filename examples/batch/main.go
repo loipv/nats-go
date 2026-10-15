@@ -35,7 +35,7 @@ func main() {
 	app.Consumer("ORDERS_BATCH", jetstream.ConsumerConfig{Durable: "loader", AckPolicy: jetstream.AckExplicitPolicy})
 
 	var batches atomic.Int32
-	nats.ConsumeBatch(app, "ORDERS_BATCH", "loader", func(_ context.Context, msgs []*nats.Msg[Order]) error {
+	app.ConsumeBatch("ORDERS_BATCH", "loader", nats.TypedBatch(func(_ context.Context, msgs []*nats.Msg[Order]) error {
 		fmt.Printf("batch %d: %d messages\n", batches.Add(1), len(msgs))
 		failed := map[int]error{}
 		for i, m := range msgs {
@@ -47,7 +47,7 @@ func main() {
 			return &nats.BatchError{Failed: failed}
 		}
 		return nil
-	},
+	}),
 		nats.BatchSize(10),
 		nats.BatchWait(500*time.Millisecond),
 		nats.MaxAttempts(2),

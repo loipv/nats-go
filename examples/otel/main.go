@@ -48,11 +48,11 @@ func main() {
 	app.UsePublish(natsotel.PublishMiddleware())
 
 	handled := make(chan struct{})
-	nats.Subscribe(app, "otel.orders.created", func(_ context.Context, m *nats.Msg[Order]) error {
+	app.Subscribe("otel.orders.created", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
 		fmt.Println("handled order", m.Data.ID)
 		close(handled)
 		return nil
-	})
+	}))
 
 	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)

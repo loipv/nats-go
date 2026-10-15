@@ -13,13 +13,13 @@ func TestSubscribeRetriesInProcess(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	attempts := make(chan int, 3)
-	Subscribe(a, "r", func(_ context.Context, m *Msg[[]byte]) error {
+	a.Subscribe("r", Typed(func(_ context.Context, m *Msg[[]byte]) error {
 		attempts <- m.Attempt()
 		if m.Attempt() < 3 {
 			return errors.New("not yet")
 		}
 		return nil
-	}, MaxAttempts(3), fast)
+	}), MaxAttempts(3), fast)
 	start(t, a)
 	_ = a.Conn().Publish("r", nil)
 	if recv(t, attempts) != 1 || recv(t, attempts) != 2 || recv(t, attempts) != 3 {
@@ -32,7 +32,7 @@ func TestSubscribeDefaultNoRetry(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	var calls atomic.Int32
-	Subscribe(a, "r", func(context.Context, *Msg[[]byte]) error { calls.Add(1); return errors.New("x") }, fast)
+	a.Subscribe("r", Typed(func(context.Context, *Msg[[]byte]) error { calls.Add(1); return errors.New("x") }), fast)
 	start(t, a)
 	_ = a.Conn().Publish("r", nil)
 	time.Sleep(300 * time.Millisecond)
@@ -45,7 +45,7 @@ func TestSubscribeExhaustedGoesToDLQ(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	setupDLQ(t, a)
-	Subscribe(a, "core.x", func(context.Context, *Msg[[]byte]) error { return errors.New("nope") }, MaxAttempts(2), fast, DLQ("dlq.core"))
+	a.Subscribe("core.x", Typed(func(context.Context, *Msg[[]byte]) error { return errors.New("nope") }), MaxAttempts(2), fast, DLQ("dlq.core"))
 	start(t, a)
 	_ = a.Publish(context.Background(), "core.x", []byte("payload"), WithHeader(Header{"Nats-Msg-Id": []string{"c-1"}}))
 	waitFor(t, func() bool { return len(dlqMsgs(t, a)) == 1 })
@@ -60,13 +60,13 @@ func TestReplyRetriesThenResponds(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	setupDLQ(t, a)
-	Reply(a, "flaky", func(_ context.Context, m *Msg[int]) (int, error) {
+	a.Reply("flaky", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Attempt() < 2 {
 			return 0, errors.New("flaky")
 		}
 		return m.Data * 10, nil
-	}, MaxAttempts(2), fast)
-	Reply(a, "broken", func(context.Context, *Msg[int]) (int, error) { return 0, errors.New("broken") }, MaxAttempts(2), fast, DLQ("dlq.reply"))
+	}), MaxAttempts(2), fast)
+	a.Reply("broken", TypedReply(func(context.Context, *Msg[int]) (int, error) { return 0, errors.New("broken") }), MaxAttempts(2), fast, DLQ("dlq.reply"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -89,7 +89,7 @@ func TestOrderedRetryKeepsOrder(t *testing.T) {
 	var seen []string
 	var mu sync.Mutex
 	var failed atomic.Bool
-	ConsumeOrdered(a, "ORDERS", func(_ context.Context, m *Msg[order]) error {
+	a.ConsumeOrdered("ORDERS", Typed(func(_ context.Context, m *Msg[order]) error {
 		if m.Data.ID == "a" && failed.CompareAndSwap(false, true) {
 			return errors.New("once")
 		}
@@ -97,7 +97,7 @@ func TestOrderedRetryKeepsOrder(t *testing.T) {
 		seen = append(seen, m.Data.ID)
 		mu.Unlock()
 		return nil
-	}, MaxAttempts(2), fast)
+	}), MaxAttempts(2), fast)
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "a"})
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "b"})
@@ -111,7 +111,7 @@ func TestShutdownAbandonsRetryWait(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	called := make(chan struct{}, 1)
-	Subscribe(a, "slow", func(context.Context, *Msg[[]byte]) error { called <- struct{}{}; return errors.New("x") },
+	a.Subscribe("slow", Typed(func(context.Context, *Msg[[]byte]) error { called <- struct{}{}; return errors.New("x") }),
 		MaxAttempts(3), WithBackoff(func(int) time.Duration { return time.Hour }))
 	start(t, a)
 	_ = a.Conn().Publish("slow", nil)
@@ -128,10 +128,10 @@ func TestReplyEncodeFailureNotRetried(t *testing.T) {
 	setupDLQ(t, a)
 	var calls atomic.Int32
 	type bad struct{ F func() }
-	Reply(a, "unencodable", func(context.Context, *Msg[int]) (bad, error) {
+	a.Reply("unencodable", TypedReply(func(context.Context, *Msg[int]) (bad, error) {
 		calls.Add(1)
 		return bad{F: func() {}}, nil
-	}, MaxAttempts(3), fast, DLQ("dlq.reply"))
+	}), MaxAttempts(3), fast, DLQ("dlq.reply"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

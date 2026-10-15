@@ -33,19 +33,22 @@ func (e *BatchError) Error() string {
 // automatic ack a nil error acks the whole batch, a *BatchError settles
 // only the listed messages as failed, and any other error fails every
 // message. Middleware does not apply to batch handlers.
-func ConsumeBatch[T any](app *App, stream, consumer string, fn func(context.Context, []*Msg[T]) error, opts ...HandlerOption) {
+func (a *App) ConsumeBatch(stream, consumer string, h BatchHandler, opts ...HandlerOption) {
 	cfg, err := newHandlerConfig(kindBatch, opts)
 	if err == nil && (stream == "" || consumer == "") {
 		err = errors.New("nats: consume batch: stream and consumer are required")
 	}
-	if err == nil && !app.claimConsumer(stream+"/"+consumer) {
+	if err == nil && h.reg == nil {
+		err = fmt.Errorf("nats: consume batch %s/%s: nil handler", stream, consumer)
+	}
+	if err == nil && !a.claimConsumer(stream+"/"+consumer) {
 		err = fmt.Errorf("nats: duplicate consumer %s/%s", stream, consumer)
 	}
 	if err != nil {
-		app.addErr(err)
+		a.addErr(err)
 		return
 	}
-	app.register(&batchReg[T]{jsReg: jsReg{kind: kindBatch, stream: stream, consumer: consumer, cfg: cfg}, codec: app.opts.codec, fn: fn})
+	a.register(h.reg(jsReg{kind: kindBatch, stream: stream, consumer: consumer, cfg: cfg}, a.opts.codec))
 }
 
 // batchReg reuses jsReg to resolve and check the consumer.

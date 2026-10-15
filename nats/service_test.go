@@ -130,7 +130,7 @@ func TestServiceRegistrationErrors(t *testing.T) {
 			Endpoint(Service(a, micro.Config{Name: "x", Version: "1.0.0"}), "e", echoInt, Concurrency(2))
 		},
 		"subject on reply": func(a *App) {
-			Reply(a, "r", echoInt, EndpointSubject("r"))
+			a.Reply("r", TypedReply(echoInt), EndpointSubject("r"))
 		},
 		"duplicate service": func(a *App) {
 			Service(a, micro.Config{Name: "x", Version: "1.0.0"})

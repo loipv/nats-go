@@ -30,7 +30,7 @@ func TestPublishMiddlewareSetsHeader(t *testing.T) {
 			return next(ctx, m)
 		}
 	})
-	Subscribe(a, "h", func(_ context.Context, m *Msg[[]byte]) error { got <- m.Header.Get("X-Trace"); return nil })
+	a.Subscribe("h", Typed(func(_ context.Context, m *Msg[[]byte]) error { got <- m.Header.Get("X-Trace"); return nil }))
 	start(t, a)
 	if err := a.Publish(context.Background(), "h", map[string]int{"a": 1}); err != nil {
 		t.Fatal(err)
@@ -43,12 +43,12 @@ func TestPublishMiddlewareSetsHeader(t *testing.T) {
 func TestRequestTypedAndServiceError(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
-	Reply(a, "inc", func(_ context.Context, m *Msg[int]) (int, error) {
+	a.Reply("inc", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Data < 0 {
 			return 0, Terminal(errors.New("negative"))
 		}
 		return m.Data + 1, nil
-	})
+	}))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -102,12 +102,12 @@ func TestHandlerCanPublishDuringShutdown(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	started, pubErr := make(chan struct{}), make(chan error, 1)
-	Subscribe(a, "work", func(ctx context.Context, _ *Msg[[]byte]) error {
+	a.Subscribe("work", Typed(func(ctx context.Context, _ *Msg[[]byte]) error {
 		close(started)
 		time.Sleep(200 * time.Millisecond)
 		pubErr <- a.Publish(ctx, "done", nil)
 		return nil
-	})
+	}))
 	start(t, a)
 	_ = a.Conn().Publish("work", nil)
 	<-started

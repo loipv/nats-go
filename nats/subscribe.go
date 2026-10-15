@@ -19,8 +19,8 @@ import (
 // backoff between attempts and keeping the worker busy meanwhile. Unlimited
 // can stall the subscription while failures last: with every worker retrying,
 // pending messages pile up and nats.go may report a slow consumer.
-func Subscribe[T any](app *App, subject string, fn func(context.Context, *Msg[T]) error, opts ...HandlerOption) {
-	registerCore(app, kindSubscribe, subject, typed(app.opts.codec, fn), opts)
+func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
+	registerCore(a, kindSubscribe, subject, h.bind, opts)
 }
 
 // Reply registers fn as the responder for requests on subject. The returned
@@ -32,8 +32,8 @@ func Subscribe[T any](app *App, subject string, fn func(context.Context, *Msg[T]
 // DLQ retry it in the worker, and the response is sent after the retries
 // finish, so the total retry time must fit within the requester's timeout.
 // Unlimited can stall the subscription while failures last.
-func Reply[Req, Resp any](app *App, subject string, fn func(context.Context, *Msg[Req]) (Resp, error), opts ...HandlerOption) {
-	registerCore(app, kindReply, subject, replyHandler(app.opts.codec, fn), opts)
+func (a *App) Reply(subject string, h ReplyHandler, opts ...HandlerOption) {
+	registerCore(a, kindReply, subject, h.bind, opts)
 }
 
 // replyHandler adapts a typed responder to a raw Handler that stores the
@@ -61,16 +61,19 @@ type reply struct {
 
 type replyKey struct{}
 
-func registerCore(app *App, kind handlerKind, subject string, h Handler, opts []HandlerOption) {
+func registerCore(app *App, kind handlerKind, subject string, bind func(Codec) Handler, opts []HandlerOption) {
 	cfg, err := newHandlerConfig(kind, opts)
 	if err == nil && subject == "" {
 		err = fmt.Errorf("nats: %s: empty subject", kind)
+	}
+	if err == nil && bind == nil {
+		err = fmt.Errorf("nats: %s %q: nil handler", kind, subject)
 	}
 	if err != nil {
 		app.addErr(err)
 		return
 	}
-	app.register(&coreReg{kind: kind, subject: subject, cfg: cfg, h: h})
+	app.register(&coreReg{kind: kind, subject: subject, cfg: cfg, h: bind(app.opts.codec)})
 }
 
 type coreReg struct {
