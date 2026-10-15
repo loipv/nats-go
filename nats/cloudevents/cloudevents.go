@@ -186,7 +186,9 @@ func newID() string {
 
 // Handle subscribes fn to the events of eventType. The attributes are read
 // from the message headers; a message with invalid attributes fails with
-// nats.Terminal, and a request gets a 400 service error.
+// nats.Terminal without calling fn, so the core logs it and, with a DLQ
+// option, dead-letters it. CloudEvents are one-way: Handle never replies; use
+// nats.Reply for request/reply.
 // An empty eventType, or one that Subject maps to "", is a registration error
 // that Start returns.
 func Handle[T any](e *Emitter, eventType string, fn func(context.Context, Event, *nats.Msg[T]) error, opts ...nats.HandlerOption) {
@@ -197,13 +199,6 @@ func Handle[T any](e *Emitter, eventType string, fn func(context.Context, Event,
 	nats.Subscribe(e.app, subject, func(ctx context.Context, m *nats.Msg[T]) error {
 		ev, err := FromHeader(m.Header)
 		if err != nil {
-			// Subscribe never answers a request, so reject it here.
-			if m.Raw != nil && m.Raw.Reply != "" {
-				_ = m.Raw.RespondMsg(&nats.RawMsg{Header: nats.Header{
-					"Nats-Service-Error":      {err.Error()},
-					"Nats-Service-Error-Code": {"400"},
-				}})
-			}
 			return nats.Terminal(err)
 		}
 		return fn(ctx, ev, m)

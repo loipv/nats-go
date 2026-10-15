@@ -3,8 +3,8 @@ package cloudevents_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,19 +76,50 @@ func TestBytesDataContentType(t *testing.T) {
 	}
 }
 
-func TestMissingAttributesTerminal(t *testing.T) {
+func TestMissingAttributesSkipsHandler(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s.ClientURL())
 	ev := cloudevents.New(a, "src")
-	called := false
-	cloudevents.Handle(ev, "x", func(context.Context, cloudevents.Event, *nats.Msg[int]) error { called = true; return nil })
+	got := make(chan string, 4)
+	cloudevents.Handle(ev, "x", func(_ context.Context, e cloudevents.Event, _ *nats.Msg[int]) error { got <- e.ID; return nil })
 	start(t, a)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err := nats.Request[int](ctx, a, "events.x", 1) // no ce-* headers
-	var se *nats.ServiceError
-	if !errors.As(err, &se) || se.Code != 400 || called {
-		t.Fatal(err, called)
+	ctx := context.Background()
+	if err := a.Publish(ctx, "events.x", 1); err != nil { // no ce-* headers
+		t.Fatal(err)
+	}
+	if err := ev.Publish(ctx, "x", 1, cloudevents.WithID("good")); err != nil {
+		t.Fatal(err)
+	}
+	if id := recv(t, got); id != "good" {
+		t.Fatal("handler saw", id)
+	}
+	select {
+	case id := <-got:
+		t.Fatal("unexpected call", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A stream capturing the handled subject makes the PubAck inbox the Reply of
+// the core delivery; Handle must not answer it.
+func TestInvalidEventDoesNotDisturbPubAck(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s.ClientURL(), func(a *nats.App) {
+		a.Stream(jetstream.StreamConfig{Name: "EVT", Subjects: []string{"events.>"}})
+	})
+	ev := cloudevents.New(a, "src")
+	var called atomic.Int32
+	cloudevents.Handle(ev, "x", func(context.Context, cloudevents.Event, *nats.Msg[int]) error { called.Add(1); return nil })
+	start(t, a)
+	for i := 0; i < 5; i++ {
+		ack, err := a.PublishJS(context.Background(), "events.x", 1) // no ce-* headers
+		if err != nil || ack == nil || ack.Stream != "EVT" {
+			t.Fatal(i, ack, err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if called.Load() != 0 {
+		t.Fatal("handler called")
 	}
 }
 

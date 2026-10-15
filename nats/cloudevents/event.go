@@ -48,8 +48,8 @@ func FromHeader(h nats.Header) (Event, error) {
 	default:
 		return Event{}, fmt.Errorf("nats: cloudevents: unsupported ce-specversion %q", v)
 	}
-	for k, v := range map[string]string{"ce-id": e.ID, "ce-source": e.Source, "ce-type": e.Type} {
-		if v == "" {
+	for _, k := range []string{"ce-id", "ce-source", "ce-type"} {
+		if get(k) == "" {
 			return Event{}, fmt.Errorf("nats: cloudevents: missing %s", k)
 		}
 	}
