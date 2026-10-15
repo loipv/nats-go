@@ -288,7 +288,7 @@ func WithOnReconnected(fn func()) Option {
 }
 
 // WithOnClosed sets a callback run when the connection is closed for good,
-// including on Shutdown and on a failed Start.
+// including on Shutdown and on a failed Start after the connection was made.
 //
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
