@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	natsio "github.com/nats-io/nats.go"
 )
 
 func TestPublishJSBatchAcksInOrder(t *testing.T) {
@@ -82,14 +84,22 @@ func TestPublishJSBatchMiddlewarePerMessage(t *testing.T) {
 func TestPublishJSBatchContextDeadline(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
-	start(t, a) // no stream: the futures fail fast or the context expires first
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	// No stream: both messages are sent, then jetstream retries the
+	// no-responders publish after 250ms, so ctx expires before any future
+	// settles and both outcomes are reported as unknown (the ctx error).
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
 	_, err := a.PublishJSBatch(ctx, []BatchMsg{{Subject: "nostream.x", Data: 1}, {Subject: "nostream.y", Data: 2}})
 	var be *PublishBatchError
 	if !errors.As(err, &be) || len(be.Failed) != 2 || time.Since(begin) > time.Second {
 		t.Fatal(err, time.Since(begin))
+	}
+	for i, err := range be.Failed {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(i, err)
+		}
 	}
 }
 
@@ -131,5 +141,54 @@ func TestPublishJSBatchReadyAcksBeatExpiredContext(t *testing.T) {
 		if ack == nil {
 			t.Fatal("ack lost", i)
 		}
+	}
+}
+
+// A ctx that is already done must stop the batch before anything is sent.
+func TestPublishJSBatchCancelledContextSendsNothing(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupStream(t, a)
+	start(t, a)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var msgs []BatchMsg
+	for i := range 5 {
+		msgs = append(msgs, BatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
+	}
+	_, err := a.PublishJSBatch(ctx, msgs)
+	var be *PublishBatchError
+	if !errors.As(err, &be) || len(be.Failed) != 5 || !errors.Is(be.Failed[4], context.Canceled) {
+		t.Fatal(err)
+	}
+	st, _ := a.JetStream().Stream(context.Background(), "ORDERS")
+	info, _ := st.Info(context.Background())
+	if info.State.Msgs != 0 {
+		t.Fatal("nothing may be sent", info.State.Msgs)
+	}
+}
+
+// Beyond the async in-flight limit (4000) every send stalls up to 200ms; an
+// expired ctx must stop sending instead of stalling for each remaining message.
+func TestPublishJSBatchDeadlineStopsSending(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	start(t, a)
+	sink, err := a.Conn().Subscribe("sink.>", func(*natsio.Msg) {}) // receives, never acks
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Unsubscribe()
+	msgs := make([]BatchMsg, 4010)
+	for i := range msgs {
+		msgs[i] = BatchMsg{Subject: "sink.x", Data: i}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	_, err = a.PublishJSBatch(ctx, msgs)
+	var be *PublishBatchError
+	if !errors.As(err, &be) || len(be.Failed) != len(msgs) || time.Since(begin) > time.Second {
+		t.Fatal(err, time.Since(begin))
 	}
 }
