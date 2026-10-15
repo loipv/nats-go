@@ -53,7 +53,8 @@ func WithURL(url string) Option {
 // and ErrorHandler passed here is called before the App's own handling.
 // Without an ErrorHandler, nats.go's async errors are logged through the
 // App's logger ("nats: connection error") instead of nats.go's default
-// stderr printer.
+// stderr printer. NoCallbacksAfterClientClose is ignored: the App needs the
+// ClosedHandler call on its final Close.
 func WithNATSOptions(opts ...natsio.Option) Option {
 	return func(o *options) error {
 		o.natsOpts = append(o.natsOpts, opts...)

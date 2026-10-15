@@ -127,7 +127,8 @@ func (s *sink) restarted() {
 // connCallbacks returns the nats.go options that emit the connection events
 // and close(closed). They replace the user's callbacks from WithNATSOptions,
 // so each wrapper calls the user's callback first. closed is closed after the
-// closed events fired, so Shutdown returns after them.
+// closed events fired, so Shutdown returns after them. The App needs ClosedCB
+// on the final Close, so NoCallbacksAfterClientClose is switched off.
 func (a *App) connCallbacks(closed chan struct{}) []natsio.Option {
 	var user natsio.Options
 	for _, opt := range a.opts.natsOpts {
@@ -135,6 +136,7 @@ func (a *App) connCallbacks(closed chan struct{}) []natsio.Option {
 	}
 	log, ev := a.opts.logger, &a.opts.events
 	return []natsio.Option{
+		func(o *natsio.Options) error { o.NoCallbacksAfterClientClose = false; return nil },
 		natsio.DisconnectErrHandler(func(nc *natsio.Conn, err error) {
 			// nats.go skips DisconnectedCB when DisconnectedErrCB is set.
 			if user.DisconnectedErrCB != nil {
@@ -197,6 +199,15 @@ func addEvent[E any](name string, dst func(*options) *[]func(E), fn func(E)) Opt
 		*d = append(*d, fn)
 		return nil
 	}
+}
+
+// wrapNoArg adapts fn to the func(struct{}) the events hold. A nil fn stays nil
+// so addEvent rejects it.
+func wrapNoArg(fn func()) func(struct{}) {
+	if fn == nil {
+		return nil
+	}
+	return func(struct{}) { fn() }
 }
 
 // WithOnRetry sets a callback run when a failed message will be tried again:
@@ -296,13 +307,7 @@ func WithOnDisconnected(fn func(err error)) Option {
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
 func WithOnReconnected(fn func()) Option {
-	return func(o *options) error {
-		if fn == nil {
-			return errors.New("nats: WithOnReconnected: nil callback")
-		}
-		o.events.reconnected = append(o.events.reconnected, func(struct{}) { fn() })
-		return nil
-	}
+	return addEvent("WithOnReconnected", func(o *options) *[]func(struct{}) { return &o.events.reconnected }, wrapNoArg(fn))
 }
 
 // WithOnClosed sets a callback run when the connection is closed for good,
@@ -315,13 +320,7 @@ func WithOnReconnected(fn func()) Option {
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
 func WithOnClosed(fn func()) Option {
-	return func(o *options) error {
-		if fn == nil {
-			return errors.New("nats: WithOnClosed: nil callback")
-		}
-		o.events.closed = append(o.events.closed, func(struct{}) { fn() })
-		return nil
-	}
+	return addEvent("WithOnClosed", func(o *options) *[]func(struct{}) { return &o.events.closed }, wrapNoArg(fn))
 }
 
 // WithOnAsyncError sets a callback run for an error the library could only

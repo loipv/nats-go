@@ -418,3 +418,17 @@ func TestEventHandlerStoppedOnFailedStart(t *testing.T) {
 		t.Fatalf("stopped = %+v", es)
 	}
 }
+
+func TestShutdownWithNoCallbacksAfterClientClose(t *testing.T) {
+	s := runServer(t)
+	closed := make(chan struct{}, 1)
+	a := newApp(t, s, WithNATSOptions(natsio.NoCallbacksAfterClientClose()),
+		WithOnClosed(func() { closed <- struct{}{} }))
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil", err)
+	}
+	recv(t, closed)
+}
