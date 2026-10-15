@@ -31,10 +31,11 @@
 //
 // App.Hook registers a Hook with OnStart and OnStop callbacks. Hooks start in
 // registration order after publishing opens and before any handler starts, and
-// stop in reverse order after the handlers have stopped. A failed Start stops
-// the hooks it started; OnStop receives Shutdown's context, even when it has
-// expired, and its errors are joined into Shutdown's. Panics are not
-// recovered.
+// stop in reverse order after the handlers have stopped (or Shutdown's
+// deadline passed). A failed Start stops the hooks it started and joins their
+// OnStop errors into its error, each wrapped "nats: stop hook i: <err>";
+// OnStop receives Shutdown's context, even when it has expired, and its errors
+// are joined into Shutdown's. Panics are not recovered.
 //
 // Start does not hold the App lock while it connects, so Health and
 // HealthHandler answer during startup with ready false; Conn and JetStream
@@ -63,8 +64,12 @@
 // errors. Each option may be given several times; callbacks of one kind run
 // in the order given, and a nil function makes New return an error. Callbacks
 // run synchronously on the goroutine where the event happens and must not
-// block; a panic in one is recovered and logged. Callbacks passed in
-// WithNATSOptions are chained: the user's runs first, then the library's.
+// block, and may run concurrently, so they must be safe for concurrent use; a
+// panic in one is recovered and logged. Callbacks passed in WithNATSOptions
+// are chained: the user's runs first, then the library's. Shutdown returns
+// after OnClosed ran when it drains within its deadline; on a deadline, and
+// after a failed Start, the connection events may arrive after the call
+// returns.
 //
 // # Handlers
 //

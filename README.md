@@ -270,7 +270,7 @@ app.Hook(nats.Hook{
 })
 ```
 
-Hooks start in registration order, after publishing opens and before any handler starts, and stop in reverse order after the handlers have stopped. If a hook or a handler fails to start, the hooks already started are stopped and `Start` returns the error. `OnStop` receives the `Shutdown` context, even when it has expired, and its errors are joined into the `Shutdown` error. Panics in hooks are not recovered.
+Hooks start in registration order, after publishing opens and before any handler starts, and stop in reverse order after the handlers have stopped (or `Shutdown`'s deadline passed). If a hook or a handler fails to start, the hooks already started are stopped and `Start` returns the error, with any `OnStop` errors joined into it (each wrapped `nats: stop hook i: <err>`). `OnStop` receives the `Shutdown` context, even when it has expired, and its errors are joined into the `Shutdown` error. Panics in hooks are not recovered.
 
 ### Events
 
@@ -287,7 +287,7 @@ The library logs what happens to messages, handlers and the connection. The `Wit
 | | `WithOnHandlerStopped` | a handler of any kind stopped, on `Shutdown` or a failed `Start` |
 | Connection | `WithOnDisconnected` | the connection was lost, or closed by `Shutdown` |
 | | `WithOnReconnected` | the connection is back |
-| | `WithOnClosed` | the connection is closed for good, on `Shutdown` or a failed `Start` |
+| | `WithOnClosed` | the connection is closed for good, on `Shutdown` or a failed `Start` after the connection was made |
 | Errors | `WithOnAsyncError` | an error the library could only log: a failed ack, nak, term, in-progress or response, a consume, fetch or restart failure, an idempotency claim that could not be completed or aborted, or a nats.go connection error. `Err` is prefixed with the operation (`ack: ...`) and still works with `errors.Is`. A failing `WithAutoInProgress` emits one event per failed tick |
 
 ```go
@@ -299,11 +299,11 @@ app, err := nats.New(
 ```
 
 - Each option may be passed several times: callbacks of the same kind run in the order given. A nil function makes `New` return an error.
-- Callbacks run synchronously on the goroutine where the event happens (a handler worker, the supervisor, a nats.go callback), so they must return quickly and must not block. A panic in a callback is recovered and logged, and the next callback still runs. The library logs first, then runs the callbacks.
+- Callbacks run synchronously on the goroutine where the event happens (a handler worker, the supervisor, a nats.go callback), so they must return quickly and must not block. Callbacks may run concurrently and must be safe for concurrent use. A panic in a callback is recovered and logged, and the next callback still runs. The library logs first, then runs the callbacks.
 - In-process retries (`Subscribe`, `SubscribeReply`, `ConsumeOrdered`, endpoints) fire `OnRetry` before the backoff wait, so a retry cut short by `Shutdown` has already been reported.
 - Handlers with `WithManualAck` emit no message event, because the handler decides the message's fate. The exception is a `ConsumeBatch` message that fails to decode: the library terms it, so `OnFailed` fires.
-- `OnDisconnected` and `OnClosed` also fire when `Shutdown` closes the connection, and `Shutdown` returns after `OnClosed` ran.
-- Callbacks you pass in `WithNATSOptions` (`DisconnectedErrHandler`, `ReconnectHandler`, `ClosedHandler`, `ErrorHandler`) are chained, not replaced: yours runs first, then the library's. Without your own `ErrorHandler`, nats.go's async errors are logged through the App's logger.
+- `OnDisconnected` and `OnClosed` also fire when `Shutdown` closes the connection. `Shutdown` returns after `OnClosed` ran when it drains within its deadline. On a deadline, and after a failed `Start`, the connection events may arrive after the call returns.
+- Callbacks you pass in `WithNATSOptions` (`DisconnectErrHandler`, `ReconnectHandler`, `ClosedHandler`, `ErrorHandler`) are chained, not replaced: yours runs first, then the library's. Without your own `ErrorHandler`, nats.go's async errors are logged through the App's logger.
 
 ## Authentication and TLS
 

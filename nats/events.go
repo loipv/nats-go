@@ -281,6 +281,10 @@ func WithOnHandlerStopped(fn func(HandlerEvent)) Option {
 // WithOnDisconnected sets a callback run when the connection is lost,
 // including the disconnect caused by Shutdown. err may be nil.
 //
+// Shutdown returns after OnClosed ran when it drains within its deadline. On a
+// deadline, and after a failed Start, the connection events may arrive after
+// the call returns.
+//
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
 func WithOnDisconnected(fn func(err error)) Option {
@@ -303,6 +307,10 @@ func WithOnReconnected(fn func()) Option {
 
 // WithOnClosed sets a callback run when the connection is closed for good,
 // including on Shutdown and on a failed Start after the connection was made.
+//
+// Shutdown returns after OnClosed ran when it drains within its deadline. On a
+// deadline, and after a failed Start, the connection events may arrive after
+// the call returns.
 //
 // fn runs synchronously on the goroutine where the event happens and must not
 // block; a panic in fn is recovered and logged.
