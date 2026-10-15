@@ -33,6 +33,7 @@ type App struct {
 	kvStores    []*KVStore
 	consumeKeys map[string]bool
 	mws         []Middleware
+	hooks       []Hook
 	pubMws      []PublishMiddleware
 	runners     []runner
 	// shutdownDone is set by the first Shutdown and closed when it returns
@@ -52,6 +53,20 @@ type App struct {
 	closed              chan struct{}
 	baseCtx             context.Context
 	cancelBase          context.CancelFunc
+}
+
+// Hook is a pair of lifecycle callbacks registered with App.Hook. Either
+// function may be nil.
+//
+// Hooks start in registration order and stop in reverse. OnStart runs after
+// publishing is open and before any handler starts, so it can publish but no
+// handler has seen a message yet. If a later hook or a handler fails to start,
+// the hooks that already started are stopped in reverse and Start returns the
+// error. OnStop gets Shutdown's ctx, even when it has already expired, and
+// must honor it. A panic in either function is not recovered.
+type Hook struct {
+	OnStart func(ctx context.Context) error
+	OnStop  func(ctx context.Context) error
 }
 
 // HandlerStatus describes one registered handler.
@@ -142,6 +157,25 @@ func (a *App) UsePublish(mw ...PublishMiddleware) {
 	a.pubMws = append(a.pubMws, mw...)
 }
 
+// Hook registers lifecycle callbacks. Hooks start in registration order, after
+// publishing opens and before any handler starts, and stop in reverse order
+// once handlers have stopped, while publishing is still open. A failed Start
+// stops the hooks it started; Shutdown runs every OnStop once, joins their
+// errors and gives them its ctx, even when expired. A Hook with both functions
+// nil is a registration error. Panics are not recovered.
+func (a *App) Hook(h Hook) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lateLocked() {
+		return
+	}
+	if h.OnStart == nil && h.OnStop == nil {
+		a.regErrs = append(a.regErrs, errors.New("nats: hook: OnStart and OnStop are both nil"))
+		return
+	}
+	a.hooks = append(a.hooks, h)
+}
+
 func (a *App) register(r registration) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -196,8 +230,8 @@ func (a *App) Start(ctx context.Context) error {
 	if err == nil && a.abortStart {
 		nc := a.nc
 		a.mu.Unlock()
-		a.abandon(ctx, nc, runners)
-		err = errors.New("nats: start: cancelled by Shutdown")
+		hookErr := a.abandon(ctx, nc, runners, len(a.hooks))
+		err = errors.Join(errors.New("nats: start: cancelled by Shutdown"), hookErr)
 		a.mu.Lock()
 	}
 	a.starting, a.abortStart = false, false
@@ -236,9 +270,9 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	}
 	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
 	var runners []runner
+	var started int
 	fail := func(err error) ([]runner, error) {
-		a.abandon(ctx, nc, runners)
-		return nil, err
+		return nil, errors.Join(err, a.abandon(ctx, nc, runners, started))
 	}
 
 	// Resolve every consumer before any handler sees a message, so a failed
@@ -262,6 +296,9 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	// subscriptions start first: they fail synchronously on a bad subject
 	// before any JetStream backlog is delivered.
 	a.pubOpen.Store(true)
+	if started, err = a.startHooks(ctx); err != nil {
+		return fail(err)
+	}
 	for _, r := range slices.Concat(core, jsRegs) {
 		rn, err := r.start(ctx, a)
 		if err != nil {
@@ -272,13 +309,42 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	return runners, nil
 }
 
+// startHooks runs OnStart in order and returns how many hooks started before
+// the first error.
+func (a *App) startHooks(ctx context.Context) (started int, err error) {
+	for i, h := range a.hooks {
+		if h.OnStart != nil {
+			if err := h.OnStart(ctx); err != nil {
+				return i, fmt.Errorf("nats: start hook %d: %w", i, err)
+			}
+		}
+	}
+	return len(a.hooks), nil
+}
+
+// stopHooks runs OnStop of the first n hooks in reverse order and joins the
+// errors.
+func (a *App) stopHooks(ctx context.Context, n int) error {
+	var errs []error
+	for i := n - 1; i >= 0; i-- {
+		if stop := a.hooks[i].OnStop; stop != nil {
+			if err := stop(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("nats: stop hook %d: %w", i, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // abandon undoes a Start that failed or was cancelled after its handlers
-// began starting.
-func (a *App) abandon(ctx context.Context, nc *natsio.Conn, runners []runner) {
+// began starting, and returns the errors of the hooks it stopped.
+func (a *App) abandon(ctx context.Context, nc *natsio.Conn, runners []runner, hooks int) error {
 	a.cancelBase()
 	_ = stopRunners(ctx, runners)
+	err := a.stopHooks(ctx, hooks)
 	a.pubOpen.Store(false)
 	nc.Close()
+	return err
 }
 
 func stopRunners(ctx context.Context, runners []runner) error {
@@ -351,21 +417,22 @@ func (a *App) shutdown(ctx context.Context) error {
 	defer a.cancelBase()
 
 	stopErr := stopRunners(ctx, a.runners)
+	hookErr := a.stopHooks(ctx, len(a.hooks))
 	a.pubOpen.Store(false)
 	if ctx.Err() == nil {
 		if err := a.nc.Drain(); err == nil {
 			select {
 			case <-a.closed:
-				return stopErr
+				return errors.Join(stopErr, hookErr)
 			case <-ctx.Done():
 			}
 		}
 	}
 	a.nc.Close()
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("nats: shutdown: %w", err)
+		return errors.Join(fmt.Errorf("nats: shutdown: %w", err), hookErr)
 	}
-	return stopErr
+	return errors.Join(stopErr, hookErr)
 }
 
 // Run calls Start, blocks until ctx is cancelled or the connection is closed

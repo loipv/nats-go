@@ -1,9 +1,14 @@
 package nats
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -408,5 +413,209 @@ func TestShutdownDeadlineExceeded(t *testing.T) {
 	}
 	if time.Since(begin) > time.Second || !a.Conn().IsClosed() {
 		t.Fatal("must return promptly and close conn")
+	}
+}
+
+// hookLog records hook calls in order.
+type hookLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (l *hookLog) add(c string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, c)
+}
+
+func (l *hookLog) get() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.calls)
+}
+
+func (l *hookLog) hook(name string, startErr, stopErr error) Hook {
+	return Hook{
+		OnStart: func(context.Context) error { l.add("start " + name); return startErr },
+		OnStop:  func(context.Context) error { l.add("stop " + name); return stopErr },
+	}
+}
+
+func TestHookOrder(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	var l hookLog
+	early := make(chan *Msg[[]byte], 1)
+	a.Subscribe("early", Typed(func(_ context.Context, m *Msg[[]byte]) error { early <- m; return nil }))
+	ha := l.hook("a", nil, nil)
+	ha.OnStart = func(ctx context.Context) error {
+		l.add("start a")
+		return a.Publish(ctx, "early", nil)
+	}
+	ha.OnStop = func(ctx context.Context) error {
+		l.add("stop a")
+		return a.Publish(ctx, "late", nil)
+	}
+	a.Hook(ha)
+	a.Hook(l.hook("b", nil, nil))
+	a.Hook(l.hook("c", nil, nil))
+	start(t, a)
+	expectNone(t, early, 200*time.Millisecond)
+	if got := l.get(); !slices.Equal(got, []string{"start a", "start b", "start c"}) {
+		t.Fatalf("calls after Start: %v", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"start a", "start b", "start c", "stop c", "stop b", "stop a"}
+	if got := l.get(); !slices.Equal(got, want) {
+		t.Fatalf("calls: %v, want %v", got, want)
+	}
+}
+
+func TestHookStartFailureRollsBack(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	var l hookLog
+	var fail atomic.Bool
+	fail.Store(true)
+	b := l.hook("b", nil, nil)
+	b.OnStart = func(context.Context) error {
+		l.add("start b")
+		if fail.Load() {
+			return errors.New("boom")
+		}
+		return nil
+	}
+	a.Hook(l.hook("a", nil, nil))
+	a.Hook(b)
+	a.Hook(l.hook("c", nil, nil))
+	err := a.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "nats: start hook 1: boom") {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := l.get(); !slices.Equal(got, []string{"start a", "start b", "stop a"}) {
+		t.Fatalf("calls: %v", got)
+	}
+	fail.Store(false)
+	start(t, a)
+	want := []string{"start a", "start b", "stop a", "start a", "start b", "start c"}
+	if got := l.get(); !slices.Equal(got, want) {
+		t.Fatalf("calls: %v, want %v", got, want)
+	}
+}
+
+func TestHookHandlerStartFailureStopsHooks(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var l hookLog
+	a.Hook(l.hook("a", nil, nil))
+	a.Subscribe("foo..bar", Typed(func(context.Context, *Msg[[]byte]) error { return nil }))
+	if err := a.Start(context.Background()); err == nil {
+		t.Fatal("Start must fail")
+	}
+	if got := l.get(); !slices.Equal(got, []string{"start a", "stop a"}) {
+		t.Fatalf("calls: %v", got)
+	}
+}
+
+func TestHookStopErrorsJoined(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var l hookLog
+	errStop := errors.New("flush")
+	a.Hook(l.hook("a", nil, errStop))
+	start(t, a)
+	err := a.Shutdown(context.Background())
+	if !errors.Is(err, errStop) || !strings.Contains(err.Error(), "nats: stop hook 0") {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestHookStopWithExpiredContext(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var ctxErr atomic.Value
+	called := make(chan struct{})
+	a.Hook(Hook{OnStop: func(ctx context.Context) error {
+		ctxErr.Store(ctx.Err() != nil)
+		close(called)
+		return nil
+	}})
+	start(t, a)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = a.Shutdown(ctx)
+	recv(t, called)
+	if ctxErr.Load() != true {
+		t.Fatal("OnStop must see the expired Shutdown ctx")
+	}
+}
+
+func TestHookStopOncePerStart(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var l hookLog
+	a.Hook(l.hook("a", nil, nil))
+	start(t, a)
+	for range 2 {
+		if err := a.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := l.get(); !slices.Equal(got, []string{"start a", "stop a"}) {
+		t.Fatalf("calls: %v", got)
+	}
+}
+
+func TestHookShutdownDuringStart(t *testing.T) {
+	a := newApp(t, runServer(t))
+	var l hookLog
+	release, entered := make(chan struct{}), make(chan struct{})
+	a.Hook(Hook{
+		OnStart: func(context.Context) error {
+			l.add("start a")
+			close(entered)
+			<-release
+			return nil
+		},
+		OnStop: func(context.Context) error { l.add("stop a"); return nil },
+	})
+	startErr := make(chan error, 1)
+	go func() { startErr <- a.Start(context.Background()) }()
+	recv(t, entered)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := a.Shutdown(ctx); err == nil {
+		t.Fatal("Shutdown must fail while Start is blocked")
+	}
+	close(release)
+	if err := recv(t, startErr); err == nil {
+		t.Fatal("Start must fail after the aborting Shutdown")
+	}
+	if got := l.get(); !slices.Contains(got, "stop a") {
+		t.Fatalf("calls: %v", got)
+	}
+}
+
+func TestHookRegistration(t *testing.T) {
+	a := newApp(t, runServer(t))
+	a.Hook(Hook{})
+	err := a.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "nats: hook: OnStart and OnStop are both nil") {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var buf bytes.Buffer
+	b := newApp(t, runServer(t), WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+	start(t, b)
+	var l hookLog
+	b.Hook(l.hook("late", nil, nil))
+	if !strings.Contains(buf.String(), "registration ignored") {
+		t.Fatalf("late Hook not logged: %q", buf.String())
+	}
+	if err := b.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.get(); len(got) != 0 {
+		t.Fatalf("late hook was called: %v", got)
 	}
 }

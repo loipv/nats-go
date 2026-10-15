@@ -260,6 +260,17 @@ CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and
 - The connection reconnects forever by default (`nats.WithNATSOptions(natsio.MaxReconnects(n))` to change it); while reconnecting, health reports `degraded`.
 - `Health()` and `HealthHandler()` report the connection and every handler; mount the handler on your own HTTP server.
 
+### Hooks
+
+```go
+app.Hook(nats.Hook{
+	OnStart: func(ctx context.Context) error { return warmCache(ctx) },
+	OnStop:  func(ctx context.Context) error { return flushMetrics(ctx) },
+})
+```
+
+Hooks start in registration order, after publishing opens and before any handler starts, and stop in reverse order after the handlers have stopped. If a hook or a handler fails to start, the hooks already started are stopped and `Start` returns the error. `OnStop` receives the `Shutdown` context, even when it has expired, and its errors are joined into the `Shutdown` error. Panics in hooks are not recovered.
+
 ## Authentication and TLS
 
 ```go

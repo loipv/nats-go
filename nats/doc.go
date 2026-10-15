@@ -29,6 +29,13 @@
 // wrong kind of handler, an invalid option value, a duplicate consumer) are
 // collected and returned by Start too.
 //
+// App.Hook registers a Hook with OnStart and OnStop callbacks. Hooks start in
+// registration order after publishing opens and before any handler starts, and
+// stop in reverse order after the handlers have stopped. A failed Start stops
+// the hooks it started; OnStop receives Shutdown's context, even when it has
+// expired, and its errors are joined into Shutdown's. Panics are not
+// recovered.
+//
 // Start does not hold the App lock while it connects, so Health and
 // HealthHandler answer during startup with ready false; Conn and JetStream
 // return nil unless the App is started or starting. Registering after Start
