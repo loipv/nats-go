@@ -88,8 +88,8 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | Handler returns | JetStream message | Retry | DLQ | Reply |
 |---|---|---|---|---|
 | `nil` | `Ack` | - | - | encoded response |
-| any other error | `NakWithDelay` by the backoff, until `MaxAttempts` is used up; then `Term` | yes, unless `MaxAttempts` is 1 | after the last attempt | `Nats-Service-Error`, code 500 |
-| `nats.Terminal(err)`, decode or validation failure | `Term` (never redelivered) | no | immediately | `Nats-Service-Error`, code 400 |
+| any other error | `NakWithDelay` by the backoff, until `MaxAttempts` is used up; then `Term` | yes, unless `MaxAttempts` is 1 | after the last attempt, if `DLQ(subject)` is set | `Nats-Service-Error`, code 500 |
+| `nats.Terminal(err)`, decode or validation failure | `Term` (never redelivered) | no | immediately, if `DLQ(subject)` is set | `Nats-Service-Error`, code 400 |
 | panic | handled as any other error | as above | as above | as above |
 
 Retry and DLQ apply when `DLQ(subject)` is set; without it a message that ran out of attempts is logged and termed. `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `Reply` and `ConsumeOrdered` do not retry unless `MaxAttempts(n)` is set.
@@ -114,7 +114,7 @@ nats.Consume(app, "PAYMENTS", "charger", charge,
 
 - With `Consume` and `ConsumeBatch` the server redelivers: a failed message is naked with a delay, and `m.Attempt()` is the delivery count. `MaxDeliver` on the consumer must be `-1` or greater than `MaxAttempts`, or `Start` fails.
 - With `Subscribe`, `Reply` and `ConsumeOrdered` there is no redelivery, so `MaxAttempts(n)` makes the library retry in the worker, waiting for the backoff between attempts. `Unlimited` can stall the subscription while failures last, a `Reply` must finish its retries within the requester's timeout, and `ConsumeOrdered` stalls the whole stream while it retries (which keeps the order).
-- `DLQ(subject)` publishes the original payload and headers plus `Nats-DLQ-Error`, `Nats-DLQ-Subject`, `Nats-DLQ-Deliveries` and, for JetStream consumers, `Nats-DLQ-Stream`, `Nats-DLQ-Consumer`, `Nats-DLQ-Sequence` and `Nats-DLQ-Msg-Id`. `Start` fails if no stream captures the subject.
+- `DLQ(subject)` publishes the original payload and headers plus `Nats-DLQ-Error`, `Nats-DLQ-Subject`, `Nats-DLQ-Deliveries` and, for JetStream consumers, `Nats-DLQ-Stream`, `Nats-DLQ-Consumer`, `Nats-DLQ-Sequence` and `Nats-DLQ-Msg-Id`. `Start` fails if no stream captures the subject, if it is the handler's source stream, or if a `Subscribe` or `Reply` handler's own subject matches it.
 - `MaxAttempts`, `WithBackoff` and `DLQ` cannot be combined with `ManualAck`.
 - `AutoInProgress()` extends the ack wait of a `Consume` or `ConsumeBatch` message while the handler runs; use it with `Timeout(d)`.
 

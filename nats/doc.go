@@ -47,10 +47,12 @@
 //
 // The error a handler returns decides what happens to the message:
 //
-//	returned error                  JetStream    Reply
-//	nil                             Ack          encoded response
-//	other error                     Nak          Nats-Service-Error, code 500
-//	Terminal(err), decode/validate  Term         Nats-Service-Error, code 400
+//	returned error                  JetStream      Reply
+//	nil                             Ack            encoded response
+//	other error                     NakWithDelay   Nats-Service-Error, code 500
+//	Terminal(err), decode/validate  Term           Nats-Service-Error, code 400
+//
+// Retries, the last attempt and the DLQ are covered under Reliability.
 //
 // With ManualAck the handler acks itself through Msg.Ack, Nak, NakWithDelay,
 // Term and InProgress, and the returned error is only logged.
@@ -87,8 +89,9 @@
 // error. Recover only turns the panic into an error earlier, for the
 // middleware around it.
 //
-// The DLQ subject must be captured by a stream you declare; Start fails
-// otherwise. The dead-lettered message keeps its payload and headers and gains
+// The DLQ subject must be captured by an existing stream other than the
+// handler's source stream, and must not match a Subscribe or Reply handler's
+// own subject; Start fails otherwise. The dead-lettered message keeps its payload and headers and gains
 // Nats-DLQ-Error, Nats-DLQ-Subject and Nats-DLQ-Deliveries, plus, for
 // JetStream consumers, Nats-DLQ-Stream, Nats-DLQ-Consumer, Nats-DLQ-Sequence
 // and Nats-DLQ-Msg-Id (the original Nats-Msg-Id). Publishing the same message
@@ -105,8 +108,8 @@
 // key with an IdempotencyStore, runs the handler, then marks the key done, or
 // releases the claim if the handler fails or panics. Duplicates are acked
 // without calling the handler (with ManualAck too), and a duplicate request
-// gets a 400; a duplicate is never retried or sent to the DLQ. NewMemoryStore is
-// correct for a single instance. NewKVStore keeps the keys in a JetStream
+// gets a 400; a duplicate is never retried or sent to the DLQ.
+// NewMemoryStore is correct for a single instance. NewKVStore keeps the keys in a JetStream
 // key-value bucket and is correct across instances; it needs nats-server 2.11
 // or later and rounds every TTL up to a whole second. ClaimTTL must exceed
 // the worst-case handler duration, because claims are released by key and
