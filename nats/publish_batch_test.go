@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,6 +46,9 @@ func TestPublishJSBatchPartialFailure(t *testing.T) {
 	var be *PublishBatchError
 	if !errors.As(err, &be) || len(be.Failed) != 1 || be.Failed[1] == nil {
 		t.Fatal(err)
+	}
+	if msg := be.Failed[1].Error(); !strings.HasPrefix(msg, "nats: batch message 1: ") {
+		t.Fatalf("Failed[1] = %q, want prefix %q", msg, "nats: batch message 1: ")
 	}
 	if acks[0] == nil || acks[1] != nil || acks[2] == nil {
 		t.Fatal(acks)
@@ -353,5 +357,20 @@ func TestPublishJSAtomicBatchSingleMessageNoHeaders(t *testing.T) {
 	ack, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "atomic.a", Data: 1}})
 	if err != nil || ack.BatchSize != 1 {
 		t.Fatal(ack, err)
+	}
+}
+
+func TestPublishJSAtomicBatchNextTwice(t *testing.T) {
+	a := newApp(t, runServer(t))
+	a.UsePublish(func(next PublishFunc) PublishFunc {
+		return func(ctx context.Context, m *RawMsg) error {
+			_ = next(ctx, m)
+			return next(ctx, m)
+		}
+	})
+	start(t, a)
+	_, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "orders.x", Data: 1}})
+	if err == nil || !strings.Contains(err.Error(), "called next twice") {
+		t.Fatalf("err = %v, want a next-called-twice error", err)
 	}
 }

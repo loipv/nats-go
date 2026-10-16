@@ -332,3 +332,22 @@ func TestJSPublishOptsRejectedOutsidePublishJS(t *testing.T) {
 		}
 	}
 }
+
+// An empty JetStream option value sets no header but is still JS-only.
+func TestEmptyJSOptionSetsNoHeader(t *testing.T) {
+	a, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := a.Message("orders.x", 1, WithMsgID(""), WithExpectStream(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Header) != 0 {
+		t.Fatalf("headers %v, want none", m.Header)
+	}
+	_, c, _ := a.build("orders.x", 1, []PubOption{WithMsgID("")})
+	if len(c.jsOnly) != 1 {
+		t.Fatalf("jsOnly = %v, want WithMsgID recorded", c.jsOnly)
+	}
+}

@@ -20,7 +20,8 @@ type BatchMsg struct {
 // index in the batch. A message whose error is "nats: batch message N not
 // sent: <ctx error>" was never sent. A message whose error is the bare
 // context error was sent but its ack did not arrive in time: the outcome is
-// unknown. The other messages may have been stored.
+// unknown. Every other error is wrapped "nats: batch message N: <err>": the
+// send or the ack failed.
 type PublishBatchError struct{ Failed map[int]error }
 
 func (e *PublishBatchError) Error() string {
@@ -46,8 +47,7 @@ func (e *PublishBatchError) Error() string {
 // A publish middleware sees each message when it is handed to the client, not
 // its ack: a natsotel "send" span does not record the ack result. A middleware
 // that calls next and then returns an error marks that message failed with
-// its error although it was sent, and one returning a bare context error
-// makes the outcome look unknown.
+// its error although it was sent.
 func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream.PubAck, error) {
 	if !a.pubOpen.Load() {
 		return nil, ErrNotRunning
@@ -79,7 +79,7 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 			return err
 		})(ctx, m)
 		if err != nil {
-			failed[i] = err
+			failed[i] = fmt.Errorf("nats: batch message %d: %w", i, err)
 			futures[i] = nil
 		} else if futures[i] == nil {
 			failed[i] = errors.New("nats: batch message not sent (a publish middleware did not call next)")
@@ -92,7 +92,7 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 		case ack := <-futures[i].Ok():
 			acks[i] = ack
 		case err := <-futures[i].Err():
-			failed[i] = err
+			failed[i] = fmt.Errorf("nats: batch message %d: %w", i, err)
 		default:
 			return false
 		}
@@ -109,7 +109,7 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 				acks[i] = ack
 				continue
 			case err := <-f.Err():
-				failed[i] = err
+				failed[i] = fmt.Errorf("nats: batch message %d: %w", i, err)
 				continue
 			case <-ctx.Done():
 				expired = true
@@ -169,6 +169,9 @@ func (a *App) PublishJSAtomicBatch(ctx context.Context, msgs []BatchMsg) (*Batch
 	for i, m := range built {
 		sent := false
 		collect := func(_ context.Context, m *RawMsg) error {
+			if sent {
+				return errors.New("nats: atomic batch: a publish middleware called next twice")
+			}
 			if m.Header == nil {
 				m.Header = Header{}
 			}

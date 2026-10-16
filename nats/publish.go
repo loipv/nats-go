@@ -30,13 +30,18 @@ func WithHeader(h Header) PubOption {
 	return func(c *pubConfig) { c.header = h }
 }
 
+// jsOption sets a JetStream header. An empty value sets none, but the option
+// still requires PublishJS.
 func jsOption(name, header, value string) PubOption {
 	return func(c *pubConfig) {
+		c.jsOnly = append(c.jsOnly, name)
+		if value == "" {
+			return
+		}
 		if c.jsHeaders == nil {
 			c.jsHeaders = map[string]string{}
 		}
 		c.jsHeaders[header] = value
-		c.jsOnly = append(c.jsOnly, name)
 	}
 }
 
