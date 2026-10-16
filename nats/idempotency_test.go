@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -228,14 +227,17 @@ func TestIdempotentAbortFailureEmits(t *testing.T) {
 	}
 }
 
-func TestIdempotentManualAckDuplicateAckFailureEmits(t *testing.T) {
+// A duplicate the handler chain already acked is not acked again with an
+// error: ErrMsgAlreadyAckd is expected there.
+func TestIdempotentManualAckDuplicateAlreadyAcked(t *testing.T) {
 	s := runServer(t)
 	onErr, errs := collect[AsyncErrorEvent]()
 	a := newApp(t, s, WithOnAsyncError(onErr))
 	setupStream(t, a)
-	// Acking before Idempotent makes the worker's own ack of the duplicate fail.
+	var seen atomic.Int32
 	a.Use(func(next Handler) Handler {
 		return func(ctx context.Context, m *RawMsg) error {
+			defer seen.Add(1)
 			_ = jsMsgFrom(ctx).Ack()
 			return next(ctx, m)
 		}
@@ -244,9 +246,9 @@ func TestIdempotentManualAckDuplicateAckFailureEmits(t *testing.T) {
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.a", order{ID: "1"})
 	_, _ = a.PublishJS(context.Background(), "orders.b", order{ID: "1"})
-	waitFor(t, func() bool {
-		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
-			return e.Handler == "ORDERS/billing" && e.Subject == "orders.b" && strings.HasPrefix(e.Err.Error(), "ack: ")
-		})
-	})
+	waitFor(t, func() bool { return seen.Load() == 2 })
+	time.Sleep(100 * time.Millisecond) // the worker acks after the chain returns
+	if got := errs(); len(got) != 0 {
+		t.Fatalf("async errors %v, want none", got)
+	}
 }
