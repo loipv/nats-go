@@ -158,9 +158,31 @@ app.ConsumeBatch("ORDERS", "loader", nats.TypedBatch(func(ctx context.Context, m
 
 Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it. With `nats.WithManualAck()` the handler settles each message itself (`m.Ack()` and friends) and a returned error is only logged; messages that fail to decode are still settled by the library.
 
+### Provisioning
+
+`app.Stream` and `app.Consumer` are synced with the server at `Start`, according to a `ProvisionMode`:
+
+| Mode | Missing | Exists, differs |
+|---|---|---|
+| `nats.Upsert` (default) | created | updated; a change the server rejects fails `Start` |
+| `nats.CreateOnly` | created | left as is, logged at Warn (`nats: config drift`) |
+| `nats.Verify` | `Start` fails | `Start` fails with `nats.ErrConfigDrift` |
+
+Set the default with `nats.WithProvision` and override it per declaration. When several services declare one stream, let its owner `Upsert` and the others `Verify`, so they cannot overwrite each other:
+
+```go
+app, _ := nats.New(nats.WithProvision(nats.Verify)) // other services' streams are only checked
+// This service owns ORDERS.
+app.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}}, nats.Upsert)
+// PAYMENTS belongs to another service: Start fails if it is missing or differs.
+app.Stream(jetstream.StreamConfig{Name: "PAYMENTS", Subjects: []string{"payments.>"}})
+```
+
+`CreateOnly` and `Verify` compare only the fields set in the declaration, since the server fills defaults into the rest; `Metadata` only needs the declared keys. So a declaration cannot require a field to be zero. Nothing is ever deleted, and the `KVStore` bucket is always created or updated.
+
 ### Supervisor
 
-`Consume` and `ConsumeBatch` handlers restart when their consumer or stream is deleted: the handler reports `restarting` (and `Health` reports `degraded`), recreates the stream and consumer if they were declared with `app.Stream` and `app.Consumer`, and resumes, waiting `WithRestartBackoff` (default `ExponentialBackoff(1s, 30s)`) between attempts. `HandlerStatus.Restarts` counts restarts. Set `IdleHeartbeat` on push consumers: without it a deleted push consumer cannot be detected.
+`Consume` and `ConsumeBatch` handlers restart when their consumer or stream is deleted: the handler reports `restarting` (and `Health` reports `degraded`), recreates the stream and consumer if they were declared with `app.Stream` and `app.Consumer` (except under `Verify`, where it waits for their owner), and resumes, waiting `WithRestartBackoff` (default `ExponentialBackoff(1s, 30s)`) between attempts. `HandlerStatus.Restarts` counts restarts. Set `IdleHeartbeat` on push consumers: without it a deleted push consumer cannot be detected.
 
 ### Panics
 

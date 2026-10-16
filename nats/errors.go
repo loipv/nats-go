@@ -23,6 +23,9 @@ var (
 	// ErrInProgress is returned by IdempotencyStore.Begin when the key is
 	// claimed and not yet completed.
 	ErrInProgress = errors.New("nats: message in progress elsewhere")
+	// ErrConfigDrift is returned by Start when a stream or consumer declared
+	// with Verify differs from the server's config. The error lists the fields.
+	ErrConfigDrift = errors.New("nats: config drift")
 )
 
 // errMaxAttempts is the DLQ cause of a message redelivered past WithMaxAttempts.

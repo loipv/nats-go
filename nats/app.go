@@ -28,7 +28,7 @@ type App struct {
 	started     bool
 	regErrs     []error
 	regs        []registration
-	streams     []jetstream.StreamConfig
+	streams     []streamDecl
 	consumers   []consumerDecl
 	consumeKeys map[string]bool
 	mws         []Middleware

@@ -3,6 +3,7 @@ package nats
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -19,6 +20,7 @@ type options struct {
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
 	restartBackoff  Backoff
+	provision       ProvisionMode
 	events          events
 }
 
@@ -59,6 +61,18 @@ func WithURL(url string) Option {
 func WithNATSOptions(opts ...natsio.Option) Option {
 	return func(o *options) error {
 		o.natsOpts = append(o.natsOpts, opts...)
+		return nil
+	}
+}
+
+// WithProvision sets the default ProvisionMode of the streams and consumers
+// declared with Stream and Consumer. Defaults to Upsert.
+func WithProvision(m ProvisionMode) Option {
+	return func(o *options) error {
+		if !m.valid() {
+			return fmt.Errorf("nats: invalid ProvisionMode %d", m)
+		}
+		o.provision = m
 		return nil
 	}
 }

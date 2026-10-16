@@ -14,7 +14,8 @@ import (
 )
 
 // KVStore is a JetStream key-value backed IdempotencyStore that is correct
-// across instances. A start hook creates or updates the bucket; it needs
+// across instances. A start hook creates or updates the bucket, whatever the
+// App's WithProvision; it needs
 // nats-server 2.11 or later for per-key TTLs. Using it before Start or after
 // Shutdown returns ErrNotRunning, also for a request a service endpoint
 // still receives while Shutdown drains the connection (publishing is closed

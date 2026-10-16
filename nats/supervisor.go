@@ -93,13 +93,14 @@ func (r *jsReg) gone(ctx context.Context, a *App, err error) bool {
 }
 
 // recoverConsumer recreates stream and consumer if they were declared with
-// App.Stream and App.Consumer. Undeclared ones are left for someone else to
-// recreate.
+// App.Stream and App.Consumer, following their ProvisionMode: a Verify
+// declaration is not recreated, so the restart waits for its owner.
+// Undeclared ones are left for someone else to recreate.
 func (a *App) recoverConsumer(ctx context.Context, stream, consumer string) error {
-	for _, cfg := range a.streams {
-		if cfg.Name == stream {
-			if _, err := a.js().CreateOrUpdateStream(ctx, cfg); err != nil {
-				return fmt.Errorf("nats: sync stream %q: %w", cfg.Name, err)
+	for _, d := range a.streams {
+		if d.cfg.Name == stream {
+			if err := a.syncStream(ctx, d); err != nil {
+				return err
 			}
 			break
 		}

@@ -190,12 +190,20 @@
 //
 // Consume and ConsumeBatch handlers are supervised: when the consumer or its
 // stream is deleted, the handler goes to the "restarting" state, recreates
-// whatever was declared with App.Stream and App.Consumer, and resumes, waiting
-// WithRestartBackoff between attempts (default ExponentialBackoff(1s, 30s))
-// and trying until it succeeds or the App shuts down. HandlerStatus.Restarts
+// whatever was declared with App.Stream and App.Consumer (except under Verify,
+// where it waits for their owner), and resumes, waiting WithRestartBackoff
+// between attempts (default ExponentialBackoff(1s, 30s)) and trying until it
+// succeeds or the App shuts down. HandlerStatus.Restarts
 // counts the restarts, and App.Health reports "degraded" meanwhile. A push
 // consumer should set IdleHeartbeat: without it a deleted push consumer cannot
 // be detected.
+//
+// App.Stream and App.Consumer are synced at Start according to a
+// ProvisionMode: Upsert (the default) creates or updates them, CreateOnly
+// creates a missing one and only logs a differing config, and Verify never
+// writes and fails Start with ErrConfigDrift when the config differs. Set the
+// default with WithProvision and override it per declaration, so a stream's
+// owner can Upsert while other services Verify it.
 //
 // # Publishing
 //
