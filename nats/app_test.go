@@ -300,6 +300,20 @@ func TestConnNilAfterFailedStart(t *testing.T) {
 	if a.Conn() != nil || a.JetStream() != nil {
 		t.Fatal("Conn and JetStream must be nil after a failed Start")
 	}
+	if c := a.Health().Connection; c != natsio.DISCONNECTED.String() {
+		t.Fatalf("Health().Connection = %s after a failed Start, want DISCONNECTED", c)
+	}
+}
+
+// Options passed to nats.go run once per connect: some read files.
+func TestNATSOptionsAppliedOnce(t *testing.T) {
+	s := runServer(t)
+	var n atomic.Int32
+	a := newApp(t, s, WithNATSOptions(func(*natsio.Options) error { n.Add(1); return nil }))
+	start(t, a)
+	if got := n.Load(); got != 1 {
+		t.Fatalf("option applied %d times, want 1", got)
+	}
 }
 
 func TestStartRetryAfterFailure(t *testing.T) {

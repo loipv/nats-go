@@ -124,54 +124,54 @@ func (s *sink) restarted() {
 	}
 }
 
-// connCallbacks returns the nats.go options that emit the connection events
-// and close(closed). They replace the user's callbacks from WithNATSOptions,
-// so each wrapper calls the user's callback first. closed is closed after the
-// closed events fired, so Shutdown returns after them. The App needs ClosedCB
-// on the final Close, so NoCallbacksAfterClientClose is switched off.
-func (a *App) connCallbacks(closed chan struct{}) []natsio.Option {
-	var user natsio.Options
-	for _, opt := range a.opts.natsOpts {
-		_ = opt(&user) // a failing option makes Connect fail with the same error
-	}
+// connCallbacks returns the nats.go option, applied after the user's, that
+// emits the connection events and closes closed. It wraps the callbacks the
+// user's options set, calling them first, so those options are applied only
+// once. closed is closed after the closed events fired, so Shutdown returns
+// after them. The App needs ClosedCB on the final Close, so
+// NoCallbacksAfterClientClose is switched off.
+func (a *App) connCallbacks(closed chan struct{}) natsio.Option {
 	log, ev := a.opts.logger, &a.opts.events
-	return []natsio.Option{
-		func(o *natsio.Options) error { o.NoCallbacksAfterClientClose = false; return nil },
-		natsio.DisconnectErrHandler(func(nc *natsio.Conn, err error) {
-			// nats.go skips DisconnectedCB when DisconnectedErrCB is set.
-			if user.DisconnectedErrCB != nil {
-				user.DisconnectedErrCB(nc, err)
-			} else if user.DisconnectedCB != nil {
-				user.DisconnectedCB(nc)
+	return func(o *natsio.Options) error {
+		disc, discErr := o.DisconnectedCB, o.DisconnectedErrCB
+		reconn, closedCB, asyncCB := o.ReconnectedCB, o.ClosedCB, o.AsyncErrorCB
+		o.NoCallbacksAfterClientClose = false
+		// nats.go skips DisconnectedCB when DisconnectedErrCB is set.
+		o.DisconnectedErrCB = func(nc *natsio.Conn, err error) {
+			if discErr != nil {
+				discErr(nc, err)
+			} else if disc != nil {
+				disc(nc)
 			}
 			fire(log, ev.disconnected, err)
-		}),
-		natsio.ReconnectHandler(func(nc *natsio.Conn) {
-			if user.ReconnectedCB != nil {
-				user.ReconnectedCB(nc)
+		}
+		o.ReconnectedCB = func(nc *natsio.Conn) {
+			if reconn != nil {
+				reconn(nc)
 			}
 			fire(log, ev.reconnected, struct{}{})
-		}),
-		natsio.ClosedHandler(func(nc *natsio.Conn) {
+		}
+		o.ClosedCB = func(nc *natsio.Conn) {
 			defer close(closed)
-			if user.ClosedCB != nil {
-				user.ClosedCB(nc)
+			if closedCB != nil {
+				closedCB(nc)
 			}
 			fire(log, ev.closed, struct{}{})
-		}),
-		natsio.ErrorHandler(func(nc *natsio.Conn, sub *natsio.Subscription, err error) {
+		}
+		o.AsyncErrorCB = func(nc *natsio.Conn, sub *natsio.Subscription, err error) {
 			e := AsyncErrorEvent{Err: fmt.Errorf("conn: %w", err)}
 			if sub != nil {
 				e.Subject = sub.Subject
 			}
-			if user.AsyncErrorCB != nil {
-				user.AsyncErrorCB(nc, sub, err)
+			if asyncCB != nil {
+				asyncCB(nc, sub, err)
 			} else {
-				// Our handler replaces nats.go's default, which prints to stderr.
+				// Ours replaces nats.go's default, which prints to stderr.
 				log.Error("nats: connection error", "subject", e.Subject, "error", err)
 			}
 			fire(log, ev.asyncError, e)
-		}),
+		}
+		return nil
 	}
 }
 

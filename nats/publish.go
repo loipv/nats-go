@@ -140,7 +140,8 @@ func (a *App) Publish(ctx context.Context, subject string, v any, opts ...PubOpt
 	if err != nil {
 		return err
 	}
-	return a.send(ctx, m, func(_ context.Context, m *RawMsg) error { return a.nc.PublishMsg(m) })
+	nc, _ := a.conns()
+	return a.send(ctx, m, func(_ context.Context, m *RawMsg) error { return nc.PublishMsg(m) })
 }
 
 // Request encodes v, sends it on subject and decodes the reply into out,
@@ -159,9 +160,10 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 	if err != nil {
 		return nil, err
 	}
+	nc, _ := a.conns()
 	var reply *RawMsg
 	err = a.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
-		r, err := a.nc.RequestMsgWithContext(ctx, m)
+		r, err := nc.RequestMsgWithContext(ctx, m)
 		reply = r
 		return err
 	})
@@ -193,10 +195,11 @@ func (a *App) PublishJS(ctx context.Context, subject string, v any, opts ...PubO
 	if err != nil {
 		return nil, err
 	}
+	_, js := a.conns()
 	var ack *jetstream.PubAck
 	err = a.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
 		var err error
-		ack, err = a.js.PublishMsg(ctx, m, c.jsPubOpts...)
+		ack, err = js.PublishMsg(ctx, m, c.jsPubOpts...)
 		return err
 	})
 	if err != nil {

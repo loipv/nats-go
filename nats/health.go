@@ -24,6 +24,9 @@ type Report struct {
 func (a *App) Health() Report {
 	a.mu.Lock()
 	nc, runners := a.nc, slices.Clone(a.runners)
+	if !a.started && !a.starting {
+		nc = nil // a failed Start leaves its closed connection behind
+	}
 	a.mu.Unlock()
 
 	r := Report{Connection: natsio.DISCONNECTED.String(), Ready: a.running(), Handlers: []HandlerStatus{}}

@@ -210,6 +210,15 @@ func (a *App) lateLocked() bool {
 
 func (a *App) running() bool { return a.isRunning.Load() }
 
+// conns returns the connection and JetStream context for publishing. It
+// takes a.mu because a retried Start may replace them while a publisher that
+// passed the pubOpen check of a failed attempt still runs.
+func (a *App) conns() (*natsio.Conn, jetstream.JetStream) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.nc, a.js
+}
+
 // Start connects, syncs declared streams and consumers, and starts every
 // handler. It does not block. Any failure stops what was started and is
 // returned, and Start may then be called again.
@@ -234,14 +243,19 @@ func (a *App) Start(ctx context.Context) error {
 	if err == nil && a.abortStart {
 		nc := a.nc
 		a.mu.Unlock()
-		hookErr := a.abandon(ctx, nc, runners, len(a.hooks))
+		// The Shutdown that cancelled this Start has returned; bound the
+		// teardown like Run bounds a Shutdown, whatever Start's ctx is.
+		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.opts.shutdownTimeout)
+		hookErr := a.abandon(tctx, nc, runners, len(a.hooks))
+		cancel()
 		err = joinHookErr(errors.New("nats: start: cancelled by Shutdown"), hookErr)
 		a.mu.Lock()
 	}
 	a.starting, a.abortStart = false, false
 	close(a.startDone)
-	// a.nc and a.js stay set after a failure: publishers read them without
-	// the lock once past the pubOpen check. Conn and JetStream hide them.
+	// a.nc and a.js stay set after a failure, for a publisher already past
+	// the pubOpen check (it reads them through conns). Conn and JetStream
+	// hide them.
 	if err != nil {
 		return err
 	}
@@ -254,7 +268,7 @@ func (a *App) Start(ctx context.Context) error {
 // it closes the connection and stops whatever it started.
 func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 	closed := make(chan struct{})
-	natsOpts := append(slices.Clone(a.opts.natsOpts), a.connCallbacks(closed)...)
+	natsOpts := append(slices.Clone(a.opts.natsOpts), a.connCallbacks(closed))
 	nc, err := natsio.Connect(a.opts.url, natsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats: connect: %w", err)
@@ -264,14 +278,16 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 		nc.Close()
 		return nil, fmt.Errorf("nats: jetstream: %w", err)
 	}
+	baseCtx, cancelBase := context.WithCancel(context.Background())
 	a.mu.Lock()
 	a.nc, a.js, a.closed = nc, js, closed
+	a.baseCtx, a.cancelBase = baseCtx, cancelBase
 	a.mu.Unlock()
 	if err := a.provision(ctx); err != nil {
+		cancelBase()
 		nc.Close()
 		return nil, err
 	}
-	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
 	var runners []runner
 	var started int
 	fail := func(err error) ([]runner, error) {
