@@ -702,3 +702,41 @@ func TestStartFailureWithoutHooksKeepsCause(t *testing.T) {
 		t.Fatalf("error is wrapped in a join: %v", err)
 	}
 }
+
+// publishingHandler is a slog.Handler that ships each record over NATS.
+type publishingHandler struct{ app *atomic.Pointer[App] }
+
+func (h publishingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h publishingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if a := h.app.Load(); a != nil {
+		_ = a.Publish(ctx, "logs", r.Message)
+	}
+	return nil
+}
+func (h publishingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h publishingHandler) WithGroup(string) slog.Handler      { return h }
+
+// A logger that publishes through the App must not deadlock when the App
+// logs while holding its lock (a registration after Start).
+func TestLoggerPublishingThroughApp(t *testing.T) {
+	var ptr atomic.Pointer[App]
+	a := newApp(t, runServer(t), WithLogger(slog.New(publishingHandler{&ptr})))
+	// Not start(): its cleanup Shutdown would hang on a deadlocked App.
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ptr.Store(a)
+	done := make(chan struct{})
+	go func() {
+		a.Use(Recover()) // ignored and logged
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("late registration deadlocked with a publishing logger")
+	}
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -53,7 +53,7 @@ func (a *App) Consumer(stream string, cfg jetstream.ConsumerConfig) {
 
 func (a *App) provision(ctx context.Context) error {
 	for _, cfg := range a.streams {
-		if _, err := a.js.CreateOrUpdateStream(ctx, cfg); err != nil {
+		if _, err := a.js().CreateOrUpdateStream(ctx, cfg); err != nil {
 			return fmt.Errorf("nats: sync stream %q: %w", cfg.Name, err)
 		}
 	}
@@ -68,9 +68,9 @@ func (a *App) provision(ctx context.Context) error {
 func (a *App) syncConsumer(ctx context.Context, d consumerDecl) error {
 	var err error
 	if d.cfg.DeliverSubject != "" {
-		_, err = a.js.CreateOrUpdatePushConsumer(ctx, d.stream, d.cfg)
+		_, err = a.js().CreateOrUpdatePushConsumer(ctx, d.stream, d.cfg)
 	} else {
-		_, err = a.js.CreateOrUpdateConsumer(ctx, d.stream, d.cfg)
+		_, err = a.js().CreateOrUpdateConsumer(ctx, d.stream, d.cfg)
 	}
 	if err != nil {
 		return fmt.Errorf("nats: sync consumer %q on stream %q: %w", d.name(), d.stream, err)

@@ -179,7 +179,7 @@ func (r *serviceReg) prepare(ctx context.Context, a *App) error {
 }
 
 func (r *serviceReg) start(_ context.Context, a *App) (runner, error) {
-	svc, err := micro.AddService(a.nc, r.cfg)
+	svc, err := micro.AddService(a.nc(), r.cfg)
 	if err != nil {
 		return nil, fmt.Errorf("nats: service %q: %w", r.cfg.Name, err)
 	}
@@ -227,6 +227,7 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 	h := a.chain(e.cfg, e.h)
 	rc := e.cfg.retry(kindEndpoint)
 	log := a.sink(name, kindEndpoint)
+	base := a.conn.Load().base
 	return micro.HandlerFunc(func(req micro.Request) {
 		if req.Reply() == "" {
 			log.Warn("nats: request without reply subject dropped", "subject", req.Subject())
@@ -235,7 +236,7 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 		r.begin()
 		defer r.done()
 		m := &RawMsg{Subject: req.Subject(), Reply: req.Reply(), Header: Header(req.Headers()), Data: req.Data()}
-		resp, abandoned, err := a.handleRequest(withSink(a.baseCtx, log), h, m, rc, r.stopping, log)
+		resp, abandoned, err := a.handleRequest(withSink(base, log), h, m, rc, r.stopping, log)
 		switch {
 		case abandoned:
 		case err != nil:

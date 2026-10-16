@@ -70,10 +70,11 @@ func (r *batchReg[T]) prepare(ctx context.Context, a *App) error {
 
 func (r *batchReg[T]) start(_ context.Context, a *App) (runner, error) {
 	// The loop context only stops fetching; handlers get one derived from
-	// baseCtx, which lives until the Shutdown deadline.
-	ctx, cancel := context.WithCancel(a.baseCtx)
+	// base, which lives until the Shutdown deadline.
+	base := a.conn.Load().base
+	ctx, cancel := context.WithCancel(base)
 	log := a.sink(r.name(), r.kind)
-	rn := &batchRunner{runnerState: newRunnerState(log), cancel: cancel, done: make(chan struct{})}
+	rn := &batchRunner{runnerState: newRunnerState(log), base: base, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(rn.done)
 		r.loop(ctx, a, rn, log)
@@ -107,7 +108,7 @@ func (r *batchReg[T]) loop(ctx context.Context, a *App, rn *batchRunner, log *si
 			return
 		}
 		if len(msgs) > 0 {
-			r.handle(a, msgs, rc, log)
+			r.handle(rn.base, a, msgs, rc, log)
 		}
 		switch {
 		case err == nil:
@@ -151,8 +152,8 @@ func (r *batchReg[T]) fetch(ctx context.Context) ([]jetstream.Msg, error) {
 
 // handle drops messages past WithMaxAttempts or failing to decode, calls fn on
 // the rest and settles them by its result.
-func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *sink) {
-	ctx := withSink(a.baseCtx, log)
+func (r *batchReg[T]) handle(base context.Context, a *App, msgs []jetstream.Msg, rc retryConfig, log *sink) {
+	ctx := withSink(base, log)
 	var ms []*Msg[T]
 	var srcs []dlqSource
 	for _, m := range msgs {
@@ -251,6 +252,8 @@ func (r *batchReg[T]) call(ctx context.Context, ms []*Msg[T], log *sink) (err er
 
 type batchRunner struct {
 	runnerState
+	// base is the parent of handler contexts.
+	base   context.Context
 	cancel context.CancelFunc
 	// done is closed when the loop exits.
 	done chan struct{}

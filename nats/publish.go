@@ -30,12 +30,13 @@ func WithHeader(h Header) PubOption {
 	return func(c *pubConfig) { c.header = h }
 }
 
-// jsOption sets a JetStream header. An empty value sets none, but the option
-// still requires PublishJS.
+// jsOption sets a JetStream header. An empty value removes it, but the
+// option still requires PublishJS.
 func jsOption(name, header, value string) PubOption {
 	return func(c *pubConfig) {
 		c.jsOnly = append(c.jsOnly, name)
 		if value == "" {
+			delete(c.jsHeaders, header)
 			return
 		}
 		if c.jsHeaders == nil {
@@ -46,10 +47,11 @@ func jsOption(name, header, value string) PubOption {
 }
 
 // WithMsgID sets Nats-Msg-Id: the stream drops messages with an ID it has seen
-// within its Duplicates window. PublishJS only.
+// within its Duplicates window. An empty id sets no header. PublishJS only.
 func WithMsgID(id string) PubOption { return jsOption("WithMsgID", jetstream.MsgIDHeader, id) }
 
-// WithExpectStream fails the publish unless the subject belongs to stream. PublishJS only.
+// WithExpectStream fails the publish unless the subject belongs to stream. An
+// empty stream sets no expectation. PublishJS only.
 func WithExpectStream(stream string) PubOption {
 	return jsOption("WithExpectStream", jetstream.ExpectedStreamHeader, stream)
 }
@@ -145,7 +147,7 @@ func (a *App) Publish(ctx context.Context, subject string, v any, opts ...PubOpt
 	if err != nil {
 		return err
 	}
-	nc, _ := a.conns()
+	nc := a.nc()
 	return a.send(ctx, m, func(_ context.Context, m *RawMsg) error { return nc.PublishMsg(m) })
 }
 
@@ -165,7 +167,7 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 	if err != nil {
 		return nil, err
 	}
-	nc, _ := a.conns()
+	nc := a.nc()
 	var reply *RawMsg
 	err = a.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
 		r, err := nc.RequestMsgWithContext(ctx, m)
@@ -200,7 +202,7 @@ func (a *App) PublishJS(ctx context.Context, subject string, v any, opts ...PubO
 	if err != nil {
 		return nil, err
 	}
-	_, js := a.conns()
+	js := a.js()
 	var ack *jetstream.PubAck
 	err = a.send(ctx, m, func(ctx context.Context, m *RawMsg) error {
 		var err error

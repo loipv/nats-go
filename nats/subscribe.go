@@ -149,13 +149,14 @@ func (r *coreReg) start(_ context.Context, a *App) (runner, error) {
 			}
 		}
 	})
-	cb := func(m *natsio.Msg) { p.dispatch(a.baseCtx, m) }
+	base := a.conn.Load().base
+	cb := func(m *natsio.Msg) { p.dispatch(base, m) }
 	var sub *natsio.Subscription
 	var err error
 	if r.cfg.queue != "" {
-		sub, err = a.nc.QueueSubscribe(r.subject, r.cfg.queue, cb)
+		sub, err = a.nc().QueueSubscribe(r.subject, r.cfg.queue, cb)
 	} else {
-		sub, err = a.nc.Subscribe(r.subject, cb)
+		sub, err = a.nc().Subscribe(r.subject, cb)
 	}
 	if err != nil {
 		_ = p.close(context.Background())

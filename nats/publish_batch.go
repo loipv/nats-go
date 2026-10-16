@@ -63,7 +63,7 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 		}
 		built[i] = m
 	}
-	_, js := a.conns()
+	js := a.js()
 	futures := make([]jetstream.PubAckFuture, len(msgs))
 	failed := map[int]error{}
 	for i, m := range built {
@@ -74,6 +74,9 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 			break
 		}
 		err := a.WrapPublish(func(_ context.Context, m *RawMsg) error {
+			if futures[i] != nil {
+				return errors.New("nats: a publish middleware called next twice")
+			}
 			f, err := js.PublishMsgAsync(m)
 			futures[i] = f
 			return err
@@ -186,7 +189,7 @@ func (a *App) PublishJSAtomicBatch(ctx context.Context, msgs []BatchMsg) (*Batch
 			return nil, fmt.Errorf("nats: atomic batch: message %d: a publish middleware did not call next", i)
 		}
 	}
-	_, js := a.conns()
+	js := a.js()
 	ack, err := jetstreamext.PublishMsgBatch(ctx, js, collected)
 	if err != nil {
 		return nil, fmt.Errorf("nats: atomic batch: %w", err)

@@ -99,16 +99,16 @@ func (r *jsReg) prepare(ctx context.Context, a *App) error {
 		if r.cfg.deliver != nil {
 			cfg.DeliverPolicy = *r.cfg.deliver
 		}
-		c, err := a.js.OrderedConsumer(ctx, r.stream, cfg)
+		c, err := a.js().OrderedConsumer(ctx, r.stream, cfg)
 		if err != nil {
 			return wrap(err)
 		}
 		r.pull = c
 		return r.check(ctx, a)
 	}
-	c, err := a.js.Consumer(ctx, r.stream, r.consumer)
+	c, err := a.js().Consumer(ctx, r.stream, r.consumer)
 	if errors.Is(err, jetstream.ErrNotPullConsumer) {
-		pc, err := a.js.PushConsumer(ctx, r.stream, r.consumer)
+		pc, err := a.js().PushConsumer(ctx, r.stream, r.consumer)
 		if err != nil {
 			return wrap(err)
 		}
@@ -225,7 +225,8 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		a.dispose(ctx, m, raw, err, rc, src, log)
 	})
 
-	cb := func(m jetstream.Msg) { rn.pool.dispatch(withJSMsg(a.baseCtx, m), toRaw(m)) }
+	base := a.conn.Load().base
+	cb := func(m jetstream.Msg) { rn.pool.dispatch(withJSMsg(base, m), toRaw(m)) }
 	var onErr jetstream.ConsumeErrHandler
 	onErr = func(cc jetstream.ConsumeContext, err error) {
 		// nats.go recreates ordered consumers itself.

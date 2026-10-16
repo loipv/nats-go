@@ -50,7 +50,7 @@ func (a *App) publishDLQ(ctx context.Context, subject string, orig *RawMsg, caus
 	if src.msgID {
 		opts = append(opts, jetstream.WithMsgID(fmt.Sprintf("dlq:%s:%d", src.stream, src.seq)))
 	}
-	if _, err := a.js.PublishMsg(ctx, &RawMsg{Subject: subject, Header: h, Data: orig.Data}, opts...); err != nil {
+	if _, err := a.js().PublishMsg(ctx, &RawMsg{Subject: subject, Header: h, Data: orig.Data}, opts...); err != nil {
 		return fmt.Errorf("nats: publish DLQ %q: %w", subject, err)
 	}
 	return nil
@@ -59,7 +59,7 @@ func (a *App) publishDLQ(ctx context.Context, subject string, orig *RawMsg, caus
 // checkDLQ verifies that a stream captures the DLQ subject and that it is
 // not the source stream, which would feed failures back to the handler.
 func (a *App) checkDLQ(ctx context.Context, subject, sourceStream string) error {
-	name, err := a.js.StreamNameBySubject(ctx, subject)
+	name, err := a.js().StreamNameBySubject(ctx, subject)
 	if err != nil {
 		return fmt.Errorf("nats: no stream for DLQ subject %q: %w", subject, err)
 	}

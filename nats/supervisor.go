@@ -88,7 +88,7 @@ func (r *jsReg) gone(ctx context.Context, a *App, err error) bool {
 	if !mayBeGone(err) {
 		return false
 	}
-	_, err = a.js.Consumer(ctx, r.stream, r.consumer)
+	_, err = a.js().Consumer(ctx, r.stream, r.consumer)
 	return errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound)
 }
 
@@ -98,7 +98,7 @@ func (r *jsReg) gone(ctx context.Context, a *App, err error) bool {
 func (a *App) recoverConsumer(ctx context.Context, stream, consumer string) error {
 	for _, cfg := range a.streams {
 		if cfg.Name == stream {
-			if _, err := a.js.CreateOrUpdateStream(ctx, cfg); err != nil {
+			if _, err := a.js().CreateOrUpdateStream(ctx, cfg); err != nil {
 				return fmt.Errorf("nats: sync stream %q: %w", cfg.Name, err)
 			}
 			break

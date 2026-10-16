@@ -351,3 +351,17 @@ func TestEmptyJSOptionSetsNoHeader(t *testing.T) {
 		t.Fatalf("jsOnly = %v, want WithMsgID recorded", c.jsOnly)
 	}
 }
+
+func TestEmptyMsgIDClearsEarlierOne(t *testing.T) {
+	a, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := a.Message("orders.x", 1, WithMsgID("x"), WithMsgID(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := m.Header.Get(jetstream.MsgIDHeader); id != "" {
+		t.Fatalf("Nats-Msg-Id = %q, want none", id)
+	}
+}

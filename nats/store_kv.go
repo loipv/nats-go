@@ -16,7 +16,9 @@ import (
 // KVStore is a JetStream key-value backed IdempotencyStore that is correct
 // across instances. A start hook creates or updates the bucket; it needs
 // nats-server 2.11 or later for per-key TTLs. Using it before Start or after
-// Shutdown returns ErrNotRunning; bucket errors are wrapped "nats: kv store".
+// Shutdown returns ErrNotRunning, also for a request a service endpoint
+// still receives while Shutdown drains the connection (publishing is closed
+// by then too). Bucket errors are wrapped "nats: kv store".
 type KVStore struct {
 	app    *App
 	bucket string

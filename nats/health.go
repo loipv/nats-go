@@ -23,9 +23,9 @@ type Report struct {
 // Start is connecting: it answers at once, with Ready false.
 func (a *App) Health() Report {
 	a.mu.Lock()
-	nc, runners := a.nc, slices.Clone(a.runners)
-	if !a.started && !a.starting {
-		nc = nil // a failed Start leaves its closed connection behind
+	nc, runners := a.nc(), slices.Clone(a.runners)
+	if nc != nil && nc.IsClosed() && !a.started {
+		nc = nil // left by a failed Start, maybe while a retry connects
 	}
 	a.mu.Unlock()
 

@@ -44,14 +44,41 @@ type App struct {
 	// pubOpen outlives isRunning during Shutdown so in-flight handlers can
 	// still publish; it closes once every handler has stopped.
 	pubOpen atomic.Bool
-	nc      *natsio.Conn
-	js      jetstream.JetStream
+	// conn is the connection of the latest Start attempt. It is loaded
+	// without a.mu: a retried Start replaces it while a publisher or handler
+	// of a failed attempt may still run, and a logger called under a.mu may
+	// publish.
+	conn atomic.Pointer[connState]
 	// publishAsyncTimeout fails an async publish whose ack never arrives so it
 	// does not count against the in-flight limit forever; tests shorten it.
 	publishAsyncTimeout time.Duration
 	closed              chan struct{}
-	baseCtx             context.Context
 	cancelBase          context.CancelFunc
+}
+
+// connState is the connection of one Start attempt.
+type connState struct {
+	nc *natsio.Conn
+	js jetstream.JetStream
+	// base is the parent of handler contexts, cancelled at the Shutdown
+	// deadline.
+	base context.Context
+}
+
+// nc returns the latest connection, or nil before the first connect.
+func (a *App) nc() *natsio.Conn {
+	if c := a.conn.Load(); c != nil {
+		return c.nc
+	}
+	return nil
+}
+
+// js returns the latest JetStream context, or nil before the first connect.
+func (a *App) js() jetstream.JetStream {
+	if c := a.conn.Load(); c != nil {
+		return c.js
+	}
+	return nil
 }
 
 // Hook is a pair of lifecycle callbacks registered with App.Hook. Either
@@ -127,7 +154,7 @@ func (a *App) Conn() *natsio.Conn {
 	if !a.started && !a.starting {
 		return nil
 	}
-	return a.nc
+	return a.nc()
 }
 
 // JetStream returns the JetStream context. It is nil before Start and after
@@ -138,7 +165,7 @@ func (a *App) JetStream() jetstream.JetStream {
 	if !a.started && !a.starting {
 		return nil
 	}
-	return a.js
+	return a.js()
 }
 
 // Use appends inbound middleware applied to every handler.
@@ -212,15 +239,6 @@ func (a *App) lateLocked() bool {
 
 func (a *App) running() bool { return a.isRunning.Load() }
 
-// conns returns the connection and JetStream context for publishing. It
-// takes a.mu because a retried Start may replace them while a publisher that
-// passed the pubOpen check of a failed attempt still runs.
-func (a *App) conns() (*natsio.Conn, jetstream.JetStream) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.nc, a.js
-}
-
 // Start connects, syncs declared streams and consumers, and starts every
 // handler. It does not block. Any failure stops what was started and is
 // returned, and Start may then be called again.
@@ -243,7 +261,7 @@ func (a *App) Start(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err == nil && a.abortStart {
-		nc := a.nc
+		nc := a.nc()
 		a.mu.Unlock()
 		// The Shutdown that cancelled this Start has returned; bound the
 		// teardown like Run bounds a Shutdown, whatever Start's ctx is.
@@ -255,9 +273,8 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.starting, a.abortStart = false, false
 	close(a.startDone)
-	// a.nc and a.js stay set after a failure, for a publisher already past
-	// the pubOpen check (it reads them through conns). Conn and JetStream
-	// hide them.
+	// a.conn stays set after a failure, for a publisher already past the
+	// pubOpen check. Conn and JetStream hide it.
 	if err != nil {
 		return err
 	}
@@ -281,9 +298,9 @@ func (a *App) connectAndStart(ctx context.Context) ([]runner, error) {
 		return nil, fmt.Errorf("nats: jetstream: %w", err)
 	}
 	baseCtx, cancelBase := context.WithCancel(context.Background())
+	a.conn.Store(&connState{nc: nc, js: js, base: baseCtx})
 	a.mu.Lock()
-	a.nc, a.js, a.closed = nc, js, closed
-	a.baseCtx, a.cancelBase = baseCtx, cancelBase
+	a.closed, a.cancelBase = closed, cancelBase
 	a.mu.Unlock()
 	if err := a.provision(ctx); err != nil {
 		cancelBase()
@@ -481,7 +498,7 @@ func (a *App) shutdown(ctx context.Context) error {
 	hookErr := a.stopHooks(ctx, len(a.hooks))
 	a.pubOpen.Store(false)
 	if ctx.Err() == nil {
-		if err := a.nc.Drain(); err == nil {
+		if err := a.nc().Drain(); err == nil {
 			select {
 			case <-a.closed:
 				return joinHookErr(stopErr, hookErr)
@@ -489,7 +506,7 @@ func (a *App) shutdown(ctx context.Context) error {
 			}
 		}
 	}
-	a.nc.Close()
+	a.nc().Close()
 	if err := ctx.Err(); err != nil {
 		return joinHookErr(fmt.Errorf("nats: shutdown: %w", err), hookErr)
 	}
