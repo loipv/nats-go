@@ -290,15 +290,17 @@ func (r *serviceRunner) stop(ctx context.Context) error {
 		r.idle = idle
 	}
 	r.mu.Unlock()
-	// Stop does not block: it only starts draining.
+	// Stop does not block: it only starts draining. Requests in flight are
+	// waited for even when it fails.
+	var stopErr error
 	if err := r.svc.Stop(); err != nil {
-		return fmt.Errorf("nats: service %q: stop: %w", r.name, err)
+		stopErr = fmt.Errorf("nats: service %q: stop: %w", r.name, err)
 	}
 	select {
 	case <-idle:
-		return nil
+		return stopErr
 	case <-ctx.Done():
-		return ctx.Err()
+		return join([]error{stopErr, ctx.Err()})
 	}
 }
 

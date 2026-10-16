@@ -86,12 +86,30 @@ func newConfig(opts []Option) *config {
 	}
 }
 
-// errorType returns the Go type name of err, or "" for nil.
+// errorType returns the Go type name of err, or "" for nil. fmt.Errorf
+// wrappers say nothing about the error, so a single wrapped error is
+// unwrapped until a more telling type appears.
 func errorType(err error) string {
 	if err == nil {
 		return ""
 	}
-	return fmt.Sprintf("%T", err)
+	t := fmt.Sprintf("%T", err)
+	for t == "*fmt.wrapError" || t == "*fmt.wrapErrors" {
+		var next error
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			next = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			if errs := u.Unwrap(); len(errs) == 1 {
+				next = errs[0]
+			}
+		}
+		if next == nil {
+			break
+		}
+		err, t = next, fmt.Sprintf("%T", next)
+	}
+	return t
 }
 
 // PublishMiddleware traces and measures each outgoing message and injects the

@@ -95,7 +95,7 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 		return c, errors.New("nats: WithDLQ requires a subject")
 	}
 	if c.dlq != "" && !validPublishSubject(c.dlq) {
-		return c, fmt.Errorf("nats: WithDLQ: invalid subject %q (wildcards are not allowed)", c.dlq)
+		return c, fmt.Errorf("nats: WithDLQ: invalid subject %q (no empty token, whitespace, * or >)", c.dlq)
 	}
 	if slices.Contains(c.used, "WithPullMaxMessages") && c.pullMax < 1 {
 		return c, fmt.Errorf("nats: WithPullMaxMessages must be at least 1, got %d", c.pullMax)
@@ -195,7 +195,9 @@ func WithBackoff(b Backoff) HandlerOption {
 }
 
 // WithDLQ publishes messages that exhausted their attempts, or failed
-// terminally, to subject. A subject that is not a valid NATS subject or that
+// terminally, to subject. Another handler may consume the DLQ subject (a DLQ
+// processor); it must not dead-letter back to this handler's subject, or
+// failures loop between the two. A subject that is not a valid NATS subject or that
 // contains a wildcard token (* or >) is a registration error reported by Start,
 // as is an empty one.
 func WithDLQ(subject string) HandlerOption {
