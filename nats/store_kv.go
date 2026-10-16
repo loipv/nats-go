@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -14,8 +15,8 @@ import (
 
 // KVStore is a JetStream key-value backed IdempotencyStore that is correct
 // across instances. A start hook creates or updates the bucket; it needs
-// nats-server 2.11 or later for per-key TTLs. Using it before Start returns
-// ErrNotRunning.
+// nats-server 2.11 or later for per-key TTLs. Using it before Start or after
+// Shutdown returns ErrNotRunning; bucket errors are wrapped "nats: kv store".
 type KVStore struct {
 	app    *App
 	bucket string
@@ -34,7 +35,9 @@ func NewKVStore(app *App, bucket string) *KVStore {
 		app.addErr(errors.New("nats: kv store: empty bucket"))
 		return s
 	}
-	app.Hook(Hook{OnStart: s.provision})
+	// Dropping the bucket handle on stop makes later calls return
+	// ErrNotRunning rather than errors from a closed connection.
+	app.Hook(Hook{OnStart: s.provision, OnStop: func(context.Context) error { s.kv.Store(nil); return nil }})
 	return s
 }
 
@@ -59,9 +62,18 @@ func (s *KVStore) keys(key string) (claim, done string, kv jetstream.KeyValue, e
 	return "c." + h, "d." + h, *p, nil
 }
 
-// keyTTL rounds ttl up to a whole second, the finest per-key TTL the server accepts.
+// keyTTL rounds ttl up to a whole second, the finest per-key TTL the server
+// accepts, without overflowing near the int64 limit.
 func keyTTL(ttl time.Duration) jetstream.KVCreateOpt {
-	return jetstream.KeyTTL(max(time.Second, (ttl+time.Second-1)/time.Second*time.Second))
+	return jetstream.KeyTTL(roundTTL(ttl))
+}
+
+func roundTTL(ttl time.Duration) time.Duration {
+	d := ttl.Truncate(time.Second)
+	if d < ttl && d <= math.MaxInt64-time.Second {
+		d += time.Second
+	}
+	return max(time.Second, d)
 }
 
 // release removes a claim. The purge marker carries a TTL so it expires on its
@@ -79,6 +91,14 @@ func exists(ctx context.Context, kv jetstream.KeyValue, key string) (bool, error
 	return err == nil, err
 }
 
+// wrapKV adds context to an error from the bucket.
+func wrapKV(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("nats: kv store: %w", err)
+}
+
 // Begin claims key for ttl, or reports ErrDuplicate or ErrInProgress.
 func (s *KVStore) Begin(ctx context.Context, key string, ttl time.Duration) error {
 	c, d, kv, err := s.keys(key)
@@ -86,7 +106,7 @@ func (s *KVStore) Begin(ctx context.Context, key string, ttl time.Duration) erro
 		return err
 	}
 	if ok, err := exists(ctx, kv, d); err != nil {
-		return err
+		return wrapKV(err)
 	} else if ok {
 		return ErrDuplicate
 	}
@@ -94,7 +114,7 @@ func (s *KVStore) Begin(ctx context.Context, key string, ttl time.Duration) erro
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return ErrInProgress
 		}
-		return err
+		return wrapKV(err)
 	}
 	// Another instance may have completed between the check and the claim.
 	ok, err := exists(ctx, kv, d)
@@ -105,9 +125,9 @@ func (s *KVStore) Begin(ctx context.Context, key string, ttl time.Duration) erro
 		err = derr
 	}
 	if err == nil {
-		err = ErrDuplicate
+		return ErrDuplicate
 	}
-	return err
+	return wrapKV(err)
 }
 
 // Complete marks key as done for ttl and releases its claim.
@@ -117,9 +137,9 @@ func (s *KVStore) Complete(ctx context.Context, key string, ttl time.Duration) e
 		return err
 	}
 	if _, err := kv.Create(ctx, d, nil, keyTTL(ttl)); err != nil && !errors.Is(err, jetstream.ErrKeyExists) {
-		return err
+		return wrapKV(err)
 	}
-	return release(ctx, kv, c)
+	return wrapKV(release(ctx, kv, c))
 }
 
 // Abort releases the claim on key so a later Begin succeeds.
@@ -128,5 +148,5 @@ func (s *KVStore) Abort(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	return release(ctx, kv, c)
+	return wrapKV(release(ctx, kv, c))
 }

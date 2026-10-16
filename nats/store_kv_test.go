@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -120,5 +121,31 @@ func TestKVStoreSubSecondTTL(t *testing.T) {
 	}
 	if err := st.Begin(ctx, "k", 500*time.Millisecond); !errors.Is(err, ErrDuplicate) {
 		t.Fatal(err)
+	}
+}
+
+func TestKVStoreAfterShutdown(t *testing.T) {
+	a := newApp(t, runServer(t))
+	st := NewKVStore(a, "IDEM")
+	start(t, a)
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Begin(context.Background(), "k", time.Minute); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Begin after Shutdown = %v, want ErrNotRunning", err)
+	}
+}
+
+func TestRoundTTL(t *testing.T) {
+	for _, c := range []struct{ in, want time.Duration }{
+		{0, time.Second},
+		{500 * time.Millisecond, time.Second},
+		{time.Second, time.Second},
+		{1200 * time.Millisecond, 2 * time.Second},
+		{math.MaxInt64, time.Duration(math.MaxInt64).Truncate(time.Second)},
+	} {
+		if got := roundTTL(c.in); got != c.want {
+			t.Errorf("roundTTL(%v) = %v, want %v", c.in, got, c.want)
+		}
 	}
 }
