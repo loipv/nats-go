@@ -32,11 +32,13 @@ func ExponentialBackoff(minDelay, maxDelay time.Duration) Backoff {
 				d *= 2
 			}
 		}
-		d = time.Duration(float64(d) * (0.8 + 0.4*rand.Float64()))
-		if d > maxDelay {
-			d = maxDelay
+		// Clamped as a float: near the int64 limit the jittered value
+		// would overflow to a negative Duration.
+		j := float64(d) * (0.8 + 0.4*rand.Float64())
+		if j >= float64(maxDelay) {
+			return maxDelay
 		}
-		return d
+		return time.Duration(j)
 	}
 }
 
@@ -126,6 +128,13 @@ func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConf
 		}
 		log.Error("nats: handler failed, will retry", "subject", m.Subject, "attempt", attempt, "error", err)
 		log.retry(m, attempt, err)
+		// Checked first: with a zero backoff, select could pick the timer.
+		select {
+		case <-stopping:
+			log.Warn("nats: retry abandoned, shutting down", "subject", m.Subject)
+			return attempt, true, err
+		default:
+		}
 		select {
 		case <-time.After(rc.backoff(attempt)):
 		case <-stopping:

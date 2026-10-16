@@ -173,12 +173,10 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 	}
 
 	err := r.call(ctx, ms, log)
-	// errors.As finds a non-nil *BatchError at any depth, so it settles only
-	// its listed indexes and acks the rest. It also reports a typed-nil one as
-	// be == nil, which would fail the whole batch; the check on the top-level
-	// value below is what lets a directly returned typed-nil mean success.
-	var be *BatchError
-	errors.As(err, &be)
+	// A non-nil *BatchError at any depth settles only its listed indexes
+	// and acks the rest. Anything else fails the whole batch, except a
+	// typed-nil *BatchError returned directly, which means success.
+	be := findBatchError(err)
 	if top, ok := err.(*BatchError); ok && top == nil {
 		err = nil // a typed-nil *BatchError lists no failures
 	}
@@ -202,6 +200,29 @@ func (r *batchReg[T]) handle(a *App, msgs []jetstream.Msg, rc retryConfig, log *
 		}
 		a.dispose(ctx, m.js, m.Raw, merr, rc, srcs[i], log)
 	}
+}
+
+// findBatchError returns the first non-nil *BatchError in err's tree.
+// errors.As would stop at a typed-nil one, as in
+// errors.Join((*BatchError)(nil), &BatchError{...}).
+func findBatchError(err error) *BatchError {
+	switch e := err.(type) {
+	case nil:
+		return nil
+	case *BatchError:
+		if e != nil {
+			return e
+		}
+	case interface{ Unwrap() error }:
+		return findBatchError(e.Unwrap())
+	case interface{ Unwrap() []error }:
+		for _, err := range e.Unwrap() {
+			if be := findBatchError(err); be != nil {
+				return be
+			}
+		}
+	}
+	return nil
 }
 
 // call runs fn with the handler timeout, extending AckWait meanwhile if

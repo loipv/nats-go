@@ -80,7 +80,9 @@ type HandlerStatus struct {
 	Kind string `json:"kind"`
 	// State is running, restarting (its consumer was deleted) or stopped
 	// (after Shutdown).
-	State     string `json:"state"`
+	State string `json:"state"`
+	// LastError is the error that made the handler restart most recently.
+	// It is kept after a successful restart.
 	LastError string `json:"last_error,omitempty"`
 	// Restarts counts how often the handler was restarted after its
 	// consumer was deleted.

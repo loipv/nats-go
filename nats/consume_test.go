@@ -229,3 +229,29 @@ func TestConsumeTermCarriesReason(t *testing.T) {
 		t.Fatalf("reason = %q", r)
 	}
 }
+
+// A ManualAck handler that acks and then reports a duplicate is not acked
+// twice with an error.
+func TestManualAckDuplicateAfterAck(t *testing.T) {
+	s := runServer(t)
+	onErr, errs := collect[AsyncErrorEvent]()
+	a := newApp(t, s, WithOnAsyncError(onErr))
+	setupStream(t, a)
+	handled := make(chan struct{}, 1)
+	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error {
+		defer func() { handled <- struct{}{} }()
+		if err := m.Ack(); err != nil {
+			return err
+		}
+		return Terminal(ErrDuplicate)
+	}), WithManualAck())
+	start(t, a)
+	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, handled)
+	time.Sleep(100 * time.Millisecond) // the ack runs after the handler returns
+	if got := errs(); len(got) != 0 {
+		t.Fatalf("async errors %v, want none", got)
+	}
+}

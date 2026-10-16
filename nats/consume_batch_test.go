@@ -239,3 +239,23 @@ func TestConsumeBatchNaksFetchedOnStop(t *testing.T) {
 		t.Fatalf("redelivered %d messages within 3s, want 1", n)
 	}
 }
+
+func TestFindBatchError(t *testing.T) {
+	listed := &BatchError{Failed: map[int]error{0: errors.New("x")}}
+	var typedNil *BatchError
+	for name, c := range map[string]struct {
+		err  error
+		want *BatchError
+	}{
+		"nil":                   {nil, nil},
+		"plain":                 {errors.New("boom"), nil},
+		"direct":                {listed, listed},
+		"wrapped":               {fmt.Errorf("w: %w", listed), listed},
+		"typed nil only":        {errors.Join(errors.New("boom"), typedNil), nil},
+		"typed nil before real": {errors.Join(typedNil, listed), listed},
+	} {
+		if got := findBatchError(c.err); got != c.want {
+			t.Errorf("%s: findBatchError = %v, want %v", name, got, c.want)
+		}
+	}
+}

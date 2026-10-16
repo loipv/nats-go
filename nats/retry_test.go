@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -278,5 +279,15 @@ func TestReplyEncodeFailureNotRetried(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if calls.Load() != 1 || len(dlqMsgs(t, a)) != 0 {
 		t.Fatal(calls.Load(), len(dlqMsgs(t, a)))
+	}
+}
+
+// Near the int64 limit the jitter must not overflow to a negative delay.
+func TestExponentialBackoffNoOverflow(t *testing.T) {
+	b := ExponentialBackoff(time.Duration(math.MaxInt64)-1, time.Duration(math.MaxInt64))
+	for range 200 {
+		if d := b(1); d <= 0 {
+			t.Fatalf("delay %d, want positive", d)
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -176,6 +177,7 @@ func (r *jsReg) source(m jetstream.Msg) dlqSource {
 func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 	log := a.sink(r.name(), r.kind)
 	rn := &jsRunner{runnerState: newRunnerState(log)}
+	rn.ackWait.Store(int64(r.ackWait))
 	rn.ctx, rn.cancel = context.WithCancel(context.Background())
 	h := a.chain(r.cfg, r.h)
 	rc := r.cfg.retry(r.kind)
@@ -193,7 +195,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		// call runs the handler, extending AckWait meanwhile if asked to.
 		call := func() error {
 			if r.cfg.autoInProgress {
-				defer keepAlive([]jetstream.Msg{jsMsgFrom(ctx)}, r.ackWait/2, log)()
+				defer keepAlive([]jetstream.Msg{jsMsgFrom(ctx)}, time.Duration(rn.ackWait.Load())/2, log)()
 			}
 			return safeCall(ctx, h, raw, log.Logger)
 		}
@@ -202,7 +204,8 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 			case errors.Is(err, ErrDuplicate):
 				// Idempotent skipped the handler, so nothing else acks it.
 				log.Debug("nats: duplicate message acked", "subject", raw.Subject)
-				if err := jsMsgFrom(ctx).Ack(); err != nil {
+				// The handler may have acked it before returning ErrDuplicate.
+				if err := jsMsgFrom(ctx).Ack(); err != nil && !errors.Is(err, jetstream.ErrMsgAlreadyAckd) {
 					log.Error("nats: ack failed", "subject", raw.Subject, "error", err)
 					log.asyncErr(raw.Subject, fmt.Errorf("ack: %w", err))
 				}
@@ -254,12 +257,13 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 				if err := a.recoverConsumer(ctx, r.stream, r.consumer); err != nil {
 					return err
 				}
-				// Prepare a copy: workers read r.ackWait concurrently, so
-				// they keep the AckWait seen at Start.
+				// Prepare a copy: the registration is shared with Start.
+				// Workers read the new AckWait from rn.
 				nr := *r
 				if err := nr.prepare(ctx, a); err != nil {
 					return err
 				}
+				rn.ackWait.Store(int64(nr.ackWait))
 				return rn.consume(&nr, cb, onErr)
 			}
 			if a.superviseLoop(ctx, reconnect, log) {
@@ -305,6 +309,8 @@ func (rn *jsRunner) consume(r *jsReg, cb jetstream.MessageHandler, onErr jetstre
 type jsRunner struct {
 	runnerState
 	pool *pool
+	// ackWait is the consumer's AckWait, updated when it is restarted.
+	ackWait atomic.Int64
 
 	// ctx is cancelled when stop begins, cutting retry and restart waits
 	// short.
