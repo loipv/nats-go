@@ -65,6 +65,17 @@ type connState struct {
 	base context.Context
 }
 
+// liveLocked returns the connection state unless there is none yet or it
+// belongs to a failed Start attempt (closed while not started), as during a
+// retried Start that has not connected yet. a.mu must be held.
+func (a *App) liveLocked() *connState {
+	c := a.conn.Load()
+	if c == nil || (!a.started && c.nc.IsClosed()) {
+		return nil
+	}
+	return c
+}
+
 // nc returns the latest connection, or nil before the first connect.
 func (a *App) nc() *natsio.Conn {
 	if c := a.conn.Load(); c != nil {
@@ -151,10 +162,10 @@ func New(opts ...Option) (*App, error) {
 func (a *App) Conn() *natsio.Conn {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.started && !a.starting {
-		return nil
+	if c := a.liveLocked(); c != nil {
+		return c.nc
 	}
-	return a.nc()
+	return nil
 }
 
 // JetStream returns the JetStream context. It is nil before Start and after
@@ -162,10 +173,10 @@ func (a *App) Conn() *natsio.Conn {
 func (a *App) JetStream() jetstream.JetStream {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.started && !a.starting {
-		return nil
+	if c := a.liveLocked(); c != nil {
+		return c.js
 	}
-	return a.js()
+	return nil
 }
 
 // Use appends inbound middleware applied to every handler.

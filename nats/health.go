@@ -23,10 +23,11 @@ type Report struct {
 // Start is connecting: it answers at once, with Ready false.
 func (a *App) Health() Report {
 	a.mu.Lock()
-	nc, runners := a.nc(), slices.Clone(a.runners)
-	if nc != nil && nc.IsClosed() && !a.started {
-		nc = nil // left by a failed Start, maybe while a retry connects
+	var nc *natsio.Conn
+	if c := a.liveLocked(); c != nil {
+		nc = c.nc
 	}
+	runners := slices.Clone(a.runners)
 	a.mu.Unlock()
 
 	r := Report{Connection: natsio.DISCONNECTED.String(), Ready: a.running(), Handlers: []HandlerStatus{}}
