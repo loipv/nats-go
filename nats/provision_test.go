@@ -74,6 +74,7 @@ func TestDrift(t *testing.T) {
 		{"pointer partial", jetstream.StreamConfig{Placement: &jetstream.Placement{Cluster: "c1"}}, ""},
 		{"pointer field", jetstream.StreamConfig{Placement: &jetstream.Placement{Cluster: "c2"}}, "Placement.Cluster (declared c2, server c1)"},
 		{"pointer server unset", jetstream.StreamConfig{RePublish: &jetstream.RePublish{Destination: "x"}}, "RePublish (declared {Source: Destination:x HeadersOnly:false}, server unset)"},
+		{"empty pointer", jetstream.StreamConfig{Placement: &jetstream.Placement{}, RePublish: &jetstream.RePublish{}}, ""},
 		{"map subset", jetstream.StreamConfig{Metadata: map[string]string{"owner": "billing"}}, ""},
 		{"map value and key", jetstream.StreamConfig{Metadata: map[string]string{"owner": "x", "team": "y"}}, "Metadata[owner] (declared x, server billing), Metadata[team] (declared y, server unset)"},
 	} {
@@ -83,12 +84,29 @@ func TestDrift(t *testing.T) {
 	}
 }
 
+func TestDriftSkipsServerOverrides(t *testing.T) {
+	// The client sends Domain as External.APIPrefix; the server never echoes it.
+	want := jetstream.StreamConfig{Mirror: &jetstream.StreamSource{Name: "X", Domain: "hub"}}
+	got := jetstream.StreamConfig{Mirror: &jetstream.StreamSource{Name: "X", External: &jetstream.ExternalStream{APIPrefix: "$JS.hub.API"}}}
+	if diff := drift(want, got); diff != nil {
+		t.Errorf("Domain: drift = %q", diff)
+	}
+	// The server sets AckWait to BackOff[0].
+	cw := jetstream.ConsumerConfig{AckWait: 30 * time.Second, BackOff: []time.Duration{time.Second}}
+	cg := jetstream.ConsumerConfig{AckWait: time.Second, BackOff: []time.Duration{time.Second}}
+	if diff := drift(consumerWant(cw), cg); diff != nil {
+		t.Errorf("AckWait with BackOff: drift = %q", diff)
+	}
+}
+
 func TestProvisionVerify(t *testing.T) {
 	s := runServer(t)
 	owner := newApp(t, s)
 	owner.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}, MaxAge: time.Hour})
 	owner.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckWait: 10 * time.Second})
 	owner.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "audit", DeliverSubject: "deliver.audit"})
+	retry := jetstream.ConsumerConfig{Durable: "retry", AckWait: 30 * time.Second, MaxDeliver: 5, BackOff: []time.Duration{time.Second, 5 * time.Second}}
+	owner.Consumer("ORDERS", retry)
 	start(t, owner)
 
 	// A partial declaration matches although the server filled defaults.
@@ -96,6 +114,8 @@ func TestProvisionVerify(t *testing.T) {
 	ok.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
 	ok.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckWait: 10 * time.Second})
 	ok.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "audit", DeliverSubject: "deliver.audit"})
+	ok.Consumer("ORDERS", retry)
+	ok.Stream(jetstream.StreamConfig{Name: "ORDERS", Placement: &jetstream.Placement{}})
 	start(t, ok)
 
 	for _, tc := range []struct {

@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -129,6 +130,31 @@ func TestShutdownDuringRestartBackoff(t *testing.T) { // Review Focus #5
 	if err := a.Shutdown(context.Background()); err != nil || time.Since(begin) > time.Second {
 		t.Fatal(err, time.Since(begin))
 	}
+}
+
+func TestRestartDoesNotRecreateVerifyConsumer(t *testing.T) {
+	s := runServer(t)
+	owner := newApp(t, s)
+	setupStream(t, owner)
+	start(t, owner)
+	a := newApp(t, s, WithProvision(Verify), WithRestartBackoff(func(int) time.Duration { return 50 * time.Millisecond }))
+	setupStream(t, a)
+	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	start(t, a)
+	waitFor(t, func() bool { return consumerInfo(t, a, "billing").NumWaiting >= 1 })
+	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
+	waitFor(t, func() bool { return a.Health().Handlers[0].State == "restarting" })
+	time.Sleep(300 * time.Millisecond) // several restart attempts
+	if _, err := a.JetStream().Consumer(context.Background(), "ORDERS", "billing"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
+		t.Fatalf("Verify consumer recreated: %v", err)
+	}
+	// Once its owner recreates it, the handler resumes.
+	if _, err := owner.JetStream().CreateConsumer(context.Background(), "ORDERS", jetstream.ConsumerConfig{
+		Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy, AckWait: 500 * time.Millisecond, MaxDeliver: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return a.Health().Status == "ok" })
 }
 
 func TestWithRestartBackoffNil(t *testing.T) {

@@ -178,7 +178,7 @@ app.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}
 app.Stream(jetstream.StreamConfig{Name: "PAYMENTS", Subjects: []string{"payments.>"}})
 ```
 
-`CreateOnly` and `Verify` compare only the fields set in the declaration, since the server fills defaults into the rest; `Metadata` only needs the declared keys. So a declaration cannot require a field to be zero. Nothing is ever deleted, and the `KVStore` bucket is always created or updated.
+`CreateOnly` and `Verify` compare only the fields set in the declaration, since the server fills defaults into the rest; `Metadata` only needs the declared keys. So a declaration cannot require a field to be zero, including the zero-valued defaults `FileStorage`, `LimitsPolicy`, `DiscardOld`, `AckExplicitPolicy` and `DeliverAllPolicy`. Fields the server overrides are skipped (a consumer's `AckWait` when `BackOff` is set, `StreamSource.Domain`). Nothing is ever deleted, and the `KVStore` bucket is always created or updated.
 
 ### Supervisor
 

@@ -24,7 +24,9 @@ var (
 	// claimed and not yet completed.
 	ErrInProgress = errors.New("nats: message in progress elsewhere")
 	// ErrConfigDrift is returned by Start when a stream or consumer declared
-	// with Verify differs from the server's config. The error lists the fields.
+	// with Verify differs from the server's config; the error lists the fields.
+	// A supervised handler recreating a deleted consumer reports it as an
+	// async error and keeps retrying until the config matches.
 	ErrConfigDrift = errors.New("nats: config drift")
 )
 

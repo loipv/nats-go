@@ -19,7 +19,13 @@ import (
 // CreateOnly and Verify compare only the fields set in the declaration: a
 // zero field means "any value", because the server fills its own defaults
 // there. Map fields such as Metadata only need to contain the declared keys.
-// So a declaration cannot require a field to be zero.
+// So a declaration cannot require a field to be zero, and the zero value is
+// also the default of FileStorage, LimitsPolicy, DiscardOld, AckExplicitPolicy
+// and DeliverAllPolicy: declaring those does not detect a server set to
+// MemoryStorage, WorkQueuePolicy and so on. Fields the server overrides are
+// skipped (a consumer's AckWait when BackOff is set, StreamSource.Domain); a
+// value the server cannot apply, such as MirrorDirect on a mirror whose origin
+// has no AllowDirect, is reported as drift.
 type ProvisionMode int
 
 const (
@@ -183,7 +189,7 @@ func (a *App) syncConsumer(ctx context.Context, d consumerDecl) error {
 		if err != nil {
 			return wrap("verify", err)
 		}
-		if diff := drift(d.cfg, info.Config); len(diff) > 0 {
+		if diff := drift(consumerWant(d.cfg), info.Config); len(diff) > 0 {
 			return wrap("verify", driftError(diff))
 		}
 	case CreateOnly:
@@ -198,7 +204,7 @@ func (a *App) syncConsumer(ctx context.Context, d consumerDecl) error {
 			if err != nil {
 				return wrap("create", err)
 			}
-			a.warnDrift("consumer", d.stream+"/"+d.name(), drift(d.cfg, info.Config))
+			a.warnDrift("consumer", d.stream+"/"+d.name(), drift(consumerWant(d.cfg), info.Config))
 			return nil
 		}
 		if err != nil {
@@ -216,6 +222,15 @@ func (a *App) syncConsumer(ctx context.Context, d consumerDecl) error {
 		}
 	}
 	return nil
+}
+
+// consumerWant drops the declared fields the server overrides: with BackOff,
+// AckWait is always BackOff[0].
+func consumerWant(cfg jetstream.ConsumerConfig) jetstream.ConsumerConfig {
+	if len(cfg.BackOff) > 0 {
+		cfg.AckWait = 0
+	}
+	return cfg
 }
 
 // lookupConsumer looks up a pull or push consumer.
@@ -264,13 +279,18 @@ func diffValue(path string, w, g reflect.Value, out *[]string) {
 			return
 		}
 	case w.Kind() == reflect.Pointer:
+		if w.Elem().IsZero() {
+			return // the server drops an empty struct such as &Placement{}
+		}
 		if !g.IsNil() {
 			diffValue(path, w.Elem(), g.Elem(), out)
 			return
 		}
 	case w.Kind() == reflect.Struct:
 		for i := range w.NumField() {
-			if f := w.Type().Field(i); f.IsExported() {
+			// A json:"-" field, such as StreamSource.Domain, is never sent
+			// back as declared.
+			if f := w.Type().Field(i); f.IsExported() && f.Tag.Get("json") != "-" {
 				diffValue(fieldPath(path, f.Name), w.Field(i), g.Field(i), out)
 			}
 		}
