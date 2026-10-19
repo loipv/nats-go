@@ -38,14 +38,12 @@ func main() {
 	// The bucket is created or updated on Start. Use NewMemoryStore instead
 	// when a single instance consumes the messages.
 	store := nats.NewKVStore(app, "IDEMPOTENCY")
-	app.Use(
-		nats.Recover(),
-		nats.Idempotent(store,
-			nats.WithIdempotencyKey(func(m *nats.RawMsg) string { return m.Header.Get("X-Order-Id") }),
-			// Must exceed the longest the handler can run.
-			nats.WithClaimTTL(time.Minute),
-			nats.WithDoneTTL(time.Hour),
-		),
+	app.Use(nats.Recover())
+	app.Idempotency(store,
+		nats.WithIdempotencyKey(func(m *nats.RawMsg) string { return m.Header.Get("X-Order-Id") }),
+		// Must exceed the longest the handler can run.
+		nats.WithClaimTTL(time.Minute),
+		nats.WithDoneTTL(time.Hour),
 	)
 
 	var handled atomic.Int32
@@ -53,7 +51,7 @@ func main() {
 		fmt.Printf("sending invoice for order %s\n", m.Data.ID)
 		handled.Add(1)
 		return nil
-	}))
+	}), nats.WithIdempotency())
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {

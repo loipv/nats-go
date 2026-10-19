@@ -445,8 +445,8 @@ func TestEventAsyncIdempotencyComplete(t *testing.T) {
 	onErr, errs := collect[AsyncErrorEvent]()
 	a := newApp(t, s, WithOnAsyncError(onErr))
 	setupStream(t, a)
-	a.Use(Idempotent(completeFails{NewMemoryStore()}))
-	a.Consume("ORDERS", "billing", Typed(nopOrder))
+	a.Idempotency(completeFails{NewMemoryStore()})
+	a.Consume("ORDERS", "billing", Typed(nopOrder), WithIdempotency())
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, WithMsgID("e-1"))
 	waitFor(t, func() bool {

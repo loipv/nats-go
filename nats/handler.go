@@ -70,6 +70,14 @@ func typed[T any](c Codec, fn func(context.Context, *Msg[T]) error) Handler {
 // chain wraps h with handler middleware, then app middleware, then the
 // handler timeout as the outermost layer.
 func (a *App) chain(c handlerConfig, h Handler) Handler {
+	if c.idem != nil {
+		// Innermost: a.idem is frozen once Start runs, like a.mws.
+		var app idemConfig
+		if a.idem != nil {
+			app = *a.idem
+		}
+		h = idempotent(c.idem.over(app.over(idemDefaults)), c.idemScope)(h)
+	}
 	for _, mw := range slices.Backward(c.mws) {
 		h = mw(h)
 	}

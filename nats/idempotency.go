@@ -137,8 +137,41 @@ func (a *App) Idempotency(store IdempotencyStore, opts ...IdempotencyOption) {
 	a.idem = c
 }
 
-// WithIdempotency enables idempotency for the handler. opts override the
-// settings of App.Idempotency field by field. Not allowed on ConsumeBatch.
+// WithIdempotency makes the handler skip messages whose key it already
+// processed successfully. opts override the settings of App.Idempotency
+// field by field, which override the defaults (key Nats-Msg-Id, claim TTL 1
+// minute, done TTL 24 hours). Start fails if no store is set at either level.
+// Not allowed on ConsumeBatch.
+//
+// Keys are scoped per handler, so handlers that receive the same message each
+// process it once, and the replicas of one handler share their keys:
+//
+//	Consume                                STREAM/consumer
+//	Endpoint                               service.group.endpoint
+//	Subscribe, SubscribeReply + WithQueue  subject@queue
+//	Subscribe, SubscribeReply, no queue    none: WithIdempotencyScope required
+//	ConsumeOrdered                         none: WithIdempotencyScope required
+//
+// The key is claimed before the handler runs, for WithClaimTTL, and
+// remembered for WithDoneTTL once the handler succeeds. A failing or
+// panicking handler releases the claim so the retry can run. A duplicate
+// returns Terminal(ErrDuplicate) without calling the handler, inside every
+// middleware: a duplicate JetStream message is acked (with WithManualAck too),
+// a duplicate request gets a 400 response, not the original response, and a
+// duplicate is never retried, dead-lettered or logged as a failure.
+//
+// A key claimed by another delivery fails with ErrInProgress, which is
+// retried like any other error. On JetStream every such nak is a delivery
+// that counts toward WithMaxAttempts: with a limit and a DLQ, a copy whose
+// twin is still being handled after all its retries is dead-lettered, even
+// though the twin then succeeds. Keep handlers within AckWait (see
+// WithAutoInProgress) and leave enough attempts and backoff for the
+// slowest handler.
+//
+// This is not exactly-once: a retry after a failure runs the side effects of
+// the failed attempt again, a key whose Complete fails is only logged and
+// reported (a later duplicate is admitted), and a duplicate arriving after
+// WithDoneTTL is processed again.
 func WithIdempotency(opts ...IdempotencyOption) HandlerOption {
 	return func(c *handlerConfig) {
 		ic := &idemConfig{}
@@ -177,37 +210,17 @@ func (a *App) idemScope(c *handlerConfig, kind handlerKind, name, def string) er
 	return nil
 }
 
-// Idempotent skips messages whose key was already processed successfully.
-// It returns Terminal(ErrDuplicate) for a duplicate without calling the
-// handler. Workers recognise it: a duplicate JetStream message is acked (with
-// WithManualAck too), a duplicate request gets a 400 response, and a duplicate is
-// never retried, dead-lettered or logged as a failure.
-//
-// A key claimed by another delivery fails with ErrInProgress, which is
-// retried like any other error. On JetStream every such nak is a delivery
-// that counts toward WithMaxAttempts: with a limit and a DLQ, a copy whose
-// twin is still being handled after all its retries is dead-lettered, even
-// though the twin then succeeds. Keep handlers within AckWait (see
-// WithAutoInProgress) and leave enough attempts and backoff for the
-// slowest handler.
-//
-// It panics if store is nil or a TTL is not positive.
-func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
-	c := idemConfig{store: store}
-	for _, o := range opts {
-		o(&c)
-	}
-	c = c.over(idemDefaults)
-	if c.store == nil || c.err != nil {
-		panic("nats: Idempotent needs a store, a key function and positive TTLs")
-	}
+// idempotent claims scope + "\x00" + the message key in c.store around
+// next. c is resolved and valid (see WithIdempotency).
+func idempotent(c idemConfig, scope string) Middleware {
 	return func(next Handler) Handler {
 		return func(ctx context.Context, m *RawMsg) error {
 			key := c.key(m)
 			if key == "" {
 				return next(ctx, m)
 			}
-			if err := store.Begin(ctx, key, c.claimTTL); err != nil {
+			key = scope + "\x00" + key
+			if err := c.store.Begin(ctx, key, c.claimTTL); err != nil {
 				if errors.Is(err, ErrDuplicate) {
 					return Terminal(ErrDuplicate)
 				}
@@ -216,7 +229,7 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 			// abort releases the claim even if ctx is already cancelled, or the
 			// retry sees ErrInProgress.
 			abort := func() {
-				if aerr := store.Abort(context.WithoutCancel(ctx), key); aerr != nil {
+				if aerr := c.store.Abort(context.WithoutCancel(ctx), key); aerr != nil {
 					log := sinkFrom(ctx)
 					log.ErrorContext(ctx, "nats: idempotency abort failed", "key", key, "error", aerr)
 					log.asyncErr(m.Subject, fmt.Errorf("idempotency abort: %w", aerr))
@@ -234,7 +247,7 @@ func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
 				abort()
 				return err
 			}
-			if err := store.Complete(context.WithoutCancel(ctx), key, c.doneTTL); err != nil {
+			if err := c.store.Complete(context.WithoutCancel(ctx), key, c.doneTTL); err != nil {
 				log := sinkFrom(ctx)
 				log.ErrorContext(ctx, "nats: idempotency complete failed", "key", key, "error", err)
 				log.asyncErr(m.Subject, fmt.Errorf("idempotency complete: %w", err))

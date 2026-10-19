@@ -49,19 +49,19 @@ func TestKVStoreProvisionFailureFailsStart(t *testing.T) {
 	}
 }
 
-func TestIdempotentAcrossInstancesKV(t *testing.T) {
+func TestIdempotencyAcrossInstancesKV(t *testing.T) {
 	s := runServer(t)
 	var calls atomic.Int32
 	var apps []*App
 	for range 2 {
 		a := newApp(t, s)
 		setupStream(t, a)
-		a.Use(Idempotent(NewKVStore(a, "IDEM"), WithIdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Order-Id") })))
+		a.Idempotency(NewKVStore(a, "IDEM"), orderKey)
 		a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error {
 			calls.Add(1)
 			time.Sleep(50 * time.Millisecond)
 			return nil
-		}), fast)
+		}), fast, WithIdempotency())
 		start(t, a)
 		apps = append(apps, a)
 	}
