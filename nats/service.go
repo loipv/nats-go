@@ -81,6 +81,10 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 // delivered to the endpoint are still handled and answered, within the
 // Shutdown deadline.
 //
+// Two endpoints of a service with the same name and group prefixes make Start
+// fail, whatever their subjects: Health, events and the idempotency scope name
+// an endpoint that way.
+//
 // Options allowed: WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff, WithDLQ,
 // WithIdempotency, WithIdempotencyScope, WithEndpointSubject and
 // WithEndpointMetadata. WithMaxAttempts defaults to 1.
@@ -119,6 +123,13 @@ func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler
 	defer s.app.mu.Unlock()
 	if s.app.lateLocked() {
 		return
+	}
+	// Health, events and the idempotency scope tell endpoints apart by this name.
+	for _, o := range s.reg.endpoints {
+		if o.healthName(s.reg.cfg.Name) == e.healthName(s.reg.cfg.Name) {
+			s.app.regErrs = append(s.app.regErrs, fmt.Errorf("nats: service %q: endpoint %q registered twice", s.reg.cfg.Name, e.healthName(s.reg.cfg.Name)))
+			return
+		}
 	}
 	s.reg.endpoints = append(s.reg.endpoints, e)
 }

@@ -118,12 +118,13 @@ func WithDoneTTL(d time.Duration) IdempotencyOption {
 // does, and its options override these field by field. It may be called
 // before or after the handlers are registered, but only once.
 func (a *App) Idempotency(store IdempotencyStore, opts ...IdempotencyOption) {
+	if store == nil {
+		a.addErr(errors.New("nats: App.Idempotency: nil store"))
+		return
+	}
 	c := &idemConfig{store: store}
 	for _, o := range opts {
 		o(c)
-	}
-	if c.store == nil {
-		c.fail(errors.New("nil store"))
 	}
 	if c.err != nil {
 		a.addErr(fmt.Errorf("nats: App.Idempotency: %w", c.err))
@@ -216,7 +217,9 @@ func (a *App) idemScope(c *handlerConfig, kind handlerKind, name, def string) er
 	if c.idem.store == nil {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.idemNoStore = append(a.idemNoStore, fmt.Sprintf("%s %q", kind, name))
+		if !a.started && !a.starting { // a late registration is ignored anyway
+			a.idemNoStore = append(a.idemNoStore, fmt.Sprintf("%s %q", kind, name))
+		}
 	}
 	return nil
 }

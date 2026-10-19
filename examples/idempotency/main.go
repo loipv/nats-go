@@ -89,6 +89,9 @@ func main() {
 		waitAcked(ctx, app, name, last)
 	}
 	fmt.Printf("mailer ran %d time(s), archiver %d time(s)\n", mailed.Load(), archived.Load())
+	if mailed.Load() != 1 || archived.Load() != 1 {
+		log.Fatal("each handler must run exactly once")
+	}
 }
 
 func waitAcked(ctx context.Context, app *nats.App, consumer string, seq uint64) {

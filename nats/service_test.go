@@ -306,3 +306,29 @@ func TestEndpointNilHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEndpointRegisteredTwice(t *testing.T) {
+	s := runServer(t)
+	h := TypedReply(func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil })
+	cases := map[string]func(svc *ServiceRef){
+		"same name, other subject": func(svc *ServiceRef) {
+			svc.Endpoint("get", h)
+			svc.Endpoint("get", h, WithEndpointSubject("other"))
+		},
+		"dotted and nested groups": func(svc *ServiceRef) {
+			svc.Group("a.b").Endpoint("get", h)
+			svc.Group("a").Group("b").Endpoint("get", h)
+		},
+	}
+	for name, register := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := newApp(t, s)
+			register(a.Service(micro.Config{Name: "svc", Version: "1.0.0"}))
+			err := a.Start(context.Background())
+			_ = a.Shutdown(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "registered twice") {
+				t.Fatalf("Start err = %v, want registered twice", err)
+			}
+		})
+	}
+}

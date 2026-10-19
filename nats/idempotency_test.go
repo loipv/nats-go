@@ -322,17 +322,18 @@ func TestIdempotencyDefaultScopes(t *testing.T) {
 	svc := a.Service(micro.Config{Name: "svc", Version: "1.0.0"})
 	svc.Group("a").Endpoint("get", reply, WithIdempotency())
 	svc.Group("b").Endpoint("get", reply, WithIdempotency())
+	svc.Group("a").Group("x").Endpoint("get", reply, WithIdempotency()) // Review Focus #2
 	a.Subscribe("audit.x", Typed(func(context.Context, *Msg[int]) error { return nil }), WithIdempotency(), WithIdempotencyScope("custom"))
 	start(t, a)
 	ctx := context.Background()
 	_, _ = a.PublishJS(ctx, "orders.x", order{ID: "1"}, orderHeader("k"))
-	for _, subj := range []string{"price.get", "a.get", "b.get"} {
+	for _, subj := range []string{"price.get", "a.get", "b.get", "a.x.get"} {
 		if _, err := a.Request(ctx, subj, 1, new(int), orderHeader("k")); err != nil {
 			t.Fatal(subj, err)
 		}
 	}
 	_ = a.Publish(ctx, "audit.x", 1, orderHeader("k"))
-	want := []string{"ORDERS/billing\x00k", "custom\x00k", "price.get@pricer\x00k", "svc.a.get\x00k", "svc.b.get\x00k"}
+	want := []string{"ORDERS/billing\x00k", "custom\x00k", "price.get@pricer\x00k", "svc.a.get\x00k", "svc.a.x.get\x00k", "svc.b.get\x00k"}
 	waitFor(t, func() bool { return len(rec.recorded()) == len(want) })
 	got := rec.recorded()
 	slices.Sort(got)
@@ -409,5 +410,20 @@ func TestIdempotencyOrderedWithScope(t *testing.T) { // Review Focus #3
 	}
 	if first, second := recv(t, got), recv(t, got); first != "o1" || second != "o2" {
 		t.Fatalf("handled %q then %q, want o1 then o2", first, second)
+	}
+}
+
+func TestIdempotencyAppStoreAfterRegistration(t *testing.T) { // Review Focus #4
+	a := newApp(t, runServer(t))
+	setupStream(t, a)
+	var calls atomic.Int32
+	a.Consume("ORDERS", "billing", counting(&calls), WithIdempotency())
+	rec := newRecordingStore()
+	a.Idempotency(rec, orderKey)
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"}, orderHeader("o1"))
+	waitFor(t, func() bool { return pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 1 })
+	if got := rec.recorded(); !slices.Equal(got, []string{"ORDERS/billing\x00o1"}) {
+		t.Fatalf("App store keys %q", got)
 	}
 }

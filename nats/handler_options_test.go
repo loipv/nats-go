@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -147,10 +148,11 @@ func TestIdempotencyConfigErrors(t *testing.T) {
 			svc := a.Service(micro.Config{Name: "fan", Version: "1.0.0", QueueGroupDisabled: true})
 			svc.Endpoint("get", reply, WithIdempotency(WithIdempotencyStore(st)))
 		}, []string{"WithIdempotencyScope", `"fan.get"`}},
-		"app nil store":   {func(a *App) { a.Idempotency(nil) }, []string{"App.Idempotency: nil store"}},
-		"app bad option":  {func(a *App) { a.Idempotency(st, WithDoneTTL(0)) }, []string{"App.Idempotency", "TTL"}},
-		"app twice":       {func(a *App) { a.Idempotency(st); a.Idempotency(st) }, []string{"App.Idempotency called twice"}},
-		"no store at all": {func(a *App) { setupStream(t, a); a.Consume("ORDERS", "billing", noop, WithIdempotency()) }, []string{"needs a store", `"ORDERS/billing"`}},
+		"app nil store":                   {func(a *App) { a.Idempotency(nil) }, []string{"App.Idempotency: nil store"}},
+		"app bad option":                  {func(a *App) { a.Idempotency(st, WithDoneTTL(0)) }, []string{"App.Idempotency", "TTL"}},
+		"app nil store with store option": {func(a *App) { a.Idempotency(nil, WithIdempotencyStore(st)) }, []string{"App.Idempotency: nil store"}},
+		"app twice":                       {func(a *App) { a.Idempotency(st); a.Idempotency(st) }, []string{"App.Idempotency called twice"}},
+		"no store at all":                 {func(a *App) { setupStream(t, a); a.Consume("ORDERS", "billing", noop, WithIdempotency()) }, []string{"needs a store", `"ORDERS/billing"`}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -171,17 +173,25 @@ func TestIdempotencyConfigValid(t *testing.T) {
 	s := runServer(t)
 	noop := Typed(func(context.Context, *Msg[[]byte]) error { return nil })
 	st := NewMemoryStore()
-	a := newApp(t, s)
+	var buf syncBuf
+	a := newApp(t, s, WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
 	setupStream(t, a)
 	a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(st)))
 	a.Subscribe("y", noop, WithIdempotency(), WithIdempotencyScope("y-svc"))
 	a.Consume("ORDERS", "billing", noop, WithIdempotency())
 	a.Idempotency(st) // after the registrations that rely on it
 	start(t, a)
-	a.Idempotency(NewMemoryStore()) // late: ignored
+	a.Idempotency(NewMemoryStore()) // late: ignored and logged
+	if !strings.Contains(buf.String(), "registration ignored") {
+		t.Fatalf("late App.Idempotency not logged: %s", buf.String())
+	}
+	a.Subscribe("late", noop, WithQueue("q"), WithIdempotency()) // late: not recorded
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.idem == nil || a.idem.store != st {
 		t.Fatalf("a.idem = %+v, want the store set before Start", a.idem)
+	}
+	if len(a.idemNoStore) != 2 {
+		t.Fatalf("idemNoStore = %q, want only the two handlers registered before Start", a.idemNoStore)
 	}
 }
