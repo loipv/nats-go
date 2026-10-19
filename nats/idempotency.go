@@ -13,6 +13,10 @@ import (
 // key for ttl and returns ErrDuplicate if the key is already completed or
 // ErrInProgress if it is claimed by another delivery; any other error is a
 // store failure. Complete marks the key done for ttl; Abort releases a claim.
+//
+// A key is the handler's scope, a NUL byte and the message key, so it can hold
+// any character, including "\x00", "/", "@" and subject wildcards. A store
+// whose backend restricts keys must hash or escape them, as KVStore does.
 type IdempotencyStore interface {
 	Begin(ctx context.Context, key string, ttl time.Duration) error
 	Complete(ctx context.Context, key string, ttl time.Duration) error
@@ -147,7 +151,8 @@ func (a *App) Idempotency(store IdempotencyStore, opts ...IdempotencyOption) {
 // process it once, and the replicas of one handler share their keys:
 //
 //	Consume                                STREAM/consumer
-//	Endpoint                               service.group.endpoint
+//	Endpoint                               service.group.endpoint, none with
+//	                                       micro.Config.QueueGroupDisabled
 //	Subscribe, SubscribeReply + WithQueue  subject@queue
 //	Subscribe, SubscribeReply, no queue    none: WithIdempotencyScope required
 //	ConsumeOrdered                         none: WithIdempotencyScope required
@@ -166,7 +171,11 @@ func (a *App) Idempotency(store IdempotencyStore, opts ...IdempotencyOption) {
 // twin is still being handled after all its retries is dead-lettered, even
 // though the twin then succeeds. Keep handlers within AckWait (see
 // WithAutoInProgress) and leave enough attempts and backoff for the
-// slowest handler.
+// slowest handler. The other handlers make one attempt by default, so a copy
+// that arrives while its twin runs (a fan-out Subscribe or ConsumeOrdered on
+// several replicas sharing a scope) is reported as failed, and dead-lettered
+// if WithDLQ is set, unless WithMaxAttempts and WithBackoff leave its twin
+// time to finish.
 //
 // This is not exactly-once: a retry after a failure runs the side effects of
 // the failed attempt again, a key whose Complete fails is only logged and
@@ -184,7 +193,9 @@ func WithIdempotency(opts ...IdempotencyOption) HandlerOption {
 }
 
 // WithIdempotencyScope sets the scope that keeps this handler's keys apart
-// from other handlers' keys, replacing the default scope.
+// from other handlers' keys, replacing the default scope (see
+// WithIdempotency). Handlers with the same scope share their keys, whether
+// the scope is explicit or a default.
 func WithIdempotencyScope(scope string) HandlerOption {
 	return func(c *handlerConfig) { c.idemScope = scope; c.used = append(c.used, "WithIdempotencyScope") }
 }

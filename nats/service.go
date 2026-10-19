@@ -82,7 +82,8 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 // Shutdown deadline.
 //
 // Options allowed: WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff, WithDLQ,
-// WithEndpointSubject and WithEndpointMetadata. WithMaxAttempts defaults to 1.
+// WithIdempotency, WithIdempotencyScope, WithEndpointSubject and
+// WithEndpointMetadata. WithMaxAttempts defaults to 1.
 func (s *ServiceRef) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
 	s.addEndpoint(nil, name, h, opts)
 }
@@ -103,7 +104,11 @@ func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler
 	}
 	if err == nil {
 		path := endpointReg{name: name, groups: groups}.healthName(s.reg.cfg.Name)
-		err = s.app.idemScope(&cfg, kindEndpoint, path, path)
+		def := path
+		if s.reg.cfg.QueueGroupDisabled {
+			def = "" // every replica receives every request
+		}
+		err = s.app.idemScope(&cfg, kindEndpoint, path, def)
 	}
 	if err != nil {
 		s.app.addErr(fmt.Errorf("nats: service %q: %w", s.reg.cfg.Name, err))

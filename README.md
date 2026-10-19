@@ -150,6 +150,7 @@ An option used on a handler kind it does not apply to makes `Start` fail.
 | `WithFilterSubjects(s...)`, `WithDeliverPolicy(p)` | `ConsumeOrdered` | subjects and start position |
 | `WithBatchSize(n)`, `WithBatchWait(d)` | `ConsumeBatch` | batch size (default 100) and fill wait (default 1s) |
 | `WithEndpointSubject(s)`, `WithEndpointMetadata(m)` | endpoints | endpoint subject and metadata |
+| `WithIdempotency(opts...)`, `WithIdempotencyScope(s)` | all but `ConsumeBatch` | [skip messages already processed](#idempotency) |
 
 ### Errors
 
@@ -324,19 +325,21 @@ Keys are scoped per handler: handlers that receive the same message each process
 | Handler | Default scope |
 |---|---|
 | `Consume` | `STREAM/consumer` |
-| `Endpoint` | `service.group.endpoint` |
+| `Endpoint` | `service.group.endpoint`; none with `QueueGroupDisabled` |
 | `Subscribe`, `SubscribeReply` with `WithQueue(q)` | `subject@q` |
 | `Subscribe`, `SubscribeReply` without a queue, `ConsumeOrdered` | none: `WithIdempotencyScope` is required |
 
 A key is claimed before the handler runs and remembered once it succeeds; duplicates are acked without calling the handler, and a duplicate request gets a 400; a duplicate is never retried or sent to the DLQ. Idempotency runs inside every middleware, so a middleware sees a duplicate as `ErrDuplicate`. A failing or panicking handler releases the claim so the retry can run. `KVStore` is correct across instances, needs nats-server 2.11+ and rounds every TTL up to a whole second. `MemoryStore` is only correct for a single instance.
 
-`Start` fails when a handler with `WithIdempotency` has no scope or no store, when `WithIdempotencyScope` is used without `WithIdempotency`, on `ConsumeBatch`, and on a nil store, nil key function or non-positive TTL.
+`Start` fails when a handler with `WithIdempotency` has no scope or no store, when `WithIdempotencyScope` is used without `WithIdempotency`, on `ConsumeBatch`, when `app.Idempotency` is called twice, and on a nil store, nil key function or non-positive TTL.
+
+A custom `IdempotencyStore` receives keys made of the scope, a NUL byte and the message key, so they can hold any character; hash or escape them if the backend restricts keys, as `KVStore` does.
 
 Limits:
 
 - It is not exactly-once. A retry runs the side effects of the failed attempt again; a key whose `Complete` fails is only logged and reported, so a later duplicate is admitted; a duplicate arriving after `WithDoneTTL` is processed again.
 - `WithClaimTTL` must exceed the worst-case handler duration, because claims are released by key without an ownership token.
-- A copy whose twin is still being handled fails with `ErrInProgress` and is retried. On JetStream each of those retries counts toward `WithMaxAttempts`, so with a limit and a DLQ the copy can be dead-lettered even though its twin succeeds.
+- A copy whose twin is still being handled fails with `ErrInProgress` and is retried. On JetStream each of those retries counts toward `WithMaxAttempts`, so with a limit and a DLQ the copy can be dead-lettered even though its twin succeeds. The other handlers make one attempt by default, so such a copy (a fan-out `Subscribe` or `ConsumeOrdered` on several replicas sharing a scope) is reported as failed, and dead-lettered if `WithDLQ` is set, unless `WithMaxAttempts` and `WithBackoff` give its twin time to finish.
 - A duplicate request gets a 400, not the original response.
 - `ConsumeBatch` has no idempotency.
 - `WithMsgID` on `Publish` or `Request` only sets the header; there is no server-side deduplication outside JetStream.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go/micro"
 )
 
 func TestHandlerOptionRules(t *testing.T) {
@@ -142,6 +143,10 @@ func TestIdempotencyConfigErrors(t *testing.T) {
 		"negative done TTL": {func(a *App) {
 			a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(st), WithDoneTTL(-time.Second)))
 		}, []string{"TTL"}},
+		"endpoint without queue group": {func(a *App) {
+			svc := a.Service(micro.Config{Name: "fan", Version: "1.0.0", QueueGroupDisabled: true})
+			svc.Endpoint("get", reply, WithIdempotency(WithIdempotencyStore(st)))
+		}, []string{"WithIdempotencyScope", `"fan.get"`}},
 		"app nil store":   {func(a *App) { a.Idempotency(nil) }, []string{"App.Idempotency: nil store"}},
 		"app bad option":  {func(a *App) { a.Idempotency(st, WithDoneTTL(0)) }, []string{"App.Idempotency", "TTL"}},
 		"app twice":       {func(a *App) { a.Idempotency(st); a.Idempotency(st) }, []string{"App.Idempotency called twice"}},

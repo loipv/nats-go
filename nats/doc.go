@@ -180,7 +180,9 @@
 // message once, and the replicas of one handler share their keys. The
 // default scope is STREAM/consumer for Consume, service.group.endpoint for an
 // endpoint and subject@queue for Subscribe and SubscribeReply with WithQueue;
-// without a queue, and for ConsumeOrdered, WithIdempotencyScope is required.
+// without a queue (including a service with QueueGroupDisabled), and for
+// ConsumeOrdered, WithIdempotencyScope is required. A custom IdempotencyStore
+// receives keys that can hold any character, a NUL byte included.
 // Duplicates are acked without calling the handler (with WithManualAck too),
 // and a duplicate request gets a 400; a duplicate is never retried or sent to
 // the DLQ. Idempotency runs inside every middleware.
