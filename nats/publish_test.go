@@ -94,11 +94,34 @@ func TestPublishJSDedup(t *testing.T) {
 	}
 }
 
+func TestCorePublishWithMsgID(t *testing.T) {
+	a := newApp(t, runServer(t))
+	got := make(chan string, 1)
+	a.Subscribe("x", Typed(func(_ context.Context, m *Msg[int]) error { got <- m.Header.Get(jetstream.MsgIDHeader); return nil }))
+	a.SubscribeReply("echo.id", TypedReply(func(_ context.Context, m *Msg[int]) (string, error) {
+		return m.Header.Get(jetstream.MsgIDHeader), nil
+	}))
+	start(t, a)
+	if err := a.Publish(context.Background(), "x", 1, WithMsgID("1")); err != nil {
+		t.Fatal(err)
+	}
+	if id := recv(t, got); id != "1" {
+		t.Fatalf("Nats-Msg-Id = %q, want 1", id)
+	}
+	var id string
+	if _, err := a.Request(context.Background(), "echo.id", 1, &id, WithMsgID("r")); err != nil {
+		t.Fatal(err)
+	}
+	if id != "r" {
+		t.Fatalf("Nats-Msg-Id = %q, want r", id)
+	}
+}
+
 func TestJSOnlyOptionRejectedOnPublish(t *testing.T) {
 	a := newApp(t, runServer(t))
 	start(t, a)
-	if err := a.Publish(context.Background(), "x", nil, WithMsgID("1")); err == nil {
-		t.Fatal("WithMsgID requires PublishJS")
+	if err := a.Publish(context.Background(), "x", nil, WithExpectStream("S")); err == nil || !strings.Contains(err.Error(), "requires PublishJS") {
+		t.Fatal("WithExpectStream requires PublishJS, got", err)
 	}
 }
 
@@ -346,9 +369,9 @@ func TestEmptyJSOptionSetsNoHeader(t *testing.T) {
 	if len(m.Header) != 0 {
 		t.Fatalf("headers %v, want none", m.Header)
 	}
-	_, c, _ := a.build("orders.x", 1, []PubOption{WithMsgID("")})
+	_, c, _ := a.build("orders.x", 1, []PubOption{WithExpectStream("")})
 	if len(c.jsOnly) != 1 {
-		t.Fatalf("jsOnly = %v, want WithMsgID recorded", c.jsOnly)
+		t.Fatalf("jsOnly = %v, want WithExpectStream recorded", c.jsOnly)
 	}
 }
 

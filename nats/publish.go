@@ -33,8 +33,17 @@ func WithHeader(h Header) PubOption {
 // jsOption sets a JetStream header. An empty value removes it, but the
 // option still requires PublishJS.
 func jsOption(name, header, value string) PubOption {
+	set := setJSHeader(header, value)
 	return func(c *pubConfig) {
 		c.jsOnly = append(c.jsOnly, name)
+		set(c)
+	}
+}
+
+// setJSHeader sets header among the JetStream headers, or removes it when
+// value is empty.
+func setJSHeader(header, value string) PubOption {
+	return func(c *pubConfig) {
 		if value == "" {
 			delete(c.jsHeaders, header)
 			return
@@ -47,8 +56,10 @@ func jsOption(name, header, value string) PubOption {
 }
 
 // WithMsgID sets Nats-Msg-Id: the stream drops messages with an ID it has seen
-// within its Duplicates window. An empty id sets no header. PublishJS only.
-func WithMsgID(id string) PubOption { return jsOption("WithMsgID", jetstream.MsgIDHeader, id) }
+// within its Duplicates window. An empty id sets no header. On a core
+// Publish or Request it only sets the header, which WithIdempotency reads by
+// default; there is no server-side deduplication.
+func WithMsgID(id string) PubOption { return setJSHeader(jetstream.MsgIDHeader, id) }
 
 // WithExpectStream fails the publish unless the subject belongs to stream. An
 // empty stream sets no expectation. PublishJS only.

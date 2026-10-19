@@ -87,8 +87,8 @@ func TestOptionErrorsUseNewNames(t *testing.T) {
 	}
 	a := newApp(t, s)
 	start(t, a)
-	if err := a.Publish(context.Background(), "x", 1, WithMsgID("1")); err == nil || !strings.Contains(err.Error(), "WithMsgID") {
-		t.Fatalf("Publish err = %v, want WithMsgID", err)
+	if err := a.Publish(context.Background(), "x", 1, WithExpectStream("S")); err == nil || !strings.Contains(err.Error(), "WithExpectStream") {
+		t.Fatalf("Publish err = %v, want WithExpectStream", err)
 	}
 }
 
