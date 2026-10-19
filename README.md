@@ -1,17 +1,37 @@
 # nats-go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/loipv/nats-go/nats.svg)](https://pkg.go.dev/github.com/loipv/nats-go/nats)
+[![CI](https://github.com/loipv/nats-go/actions/workflows/ci.yml/badge.svg)](https://github.com/loipv/nats-go/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/loipv/nats-go)](https://goreportcard.com/report/github.com/loipv/nats-go)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A Go framework for building [NATS](https://nats.io) and JetStream services on top of the official [nats.go](https://github.com/nats-io/nats.go) client.
 
 - **Typed handlers** with generics: `app.Subscribe("orders.*", nats.Typed(func(ctx context.Context, m *nats.Msg[Order]) error { ... }))`
 - **Core NATS**: wildcards, queue groups, request/reply with error propagation
-- **JetStream**: pull, push and ordered consumers, automatic or manual ack
-- **Publishing**: fire-and-forget, typed request/reply, JetStream with ack and deduplication
-- **Reliability**: retry with backoff, dead-letter queue, idempotency (in-memory or KV), batch handlers, automatic restart of consumers, panic recovery
-- **Integrations**: NATS micro services, batch and atomic batch publishing, OpenTelemetry tracing and metrics, CloudEvents
-- **Streams and consumers declared in code**, created or updated on startup
-- **Middleware** on the inbound and outbound paths
+- **JetStream**: pull, push and ordered consumers, automatic or manual ack, batch handlers
+- **Publishing**: fire-and-forget, typed request/reply, JetStream with ack and deduplication, batch and atomic batch
+- **Reliability**: retry with backoff, dead-letter queue, idempotency (in-memory or KV), automatic restart of consumers, panic recovery
+- **Streams and consumers declared in code**, created, updated or only verified on startup
+- **Middleware** on the inbound and outbound paths, lifecycle hooks and event callbacks for your own extensions
+- **Integrations**: NATS micro services, OpenTelemetry tracing and metrics, CloudEvents
 - **Fail-fast startup**, **graceful shutdown** with a deadline, **health** endpoint
 - Every auth method and TLS supported by nats.go
+
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Examples](#examples)
+- [Handlers](#handlers)
+- [Publishing](#publishing)
+- [Middleware and extensions](#middleware-and-extensions)
+- [Streams and consumers](#streams-and-consumers)
+- [Reliability](#reliability)
+- [Integrations](#integrations)
+- [Lifecycle](#lifecycle)
+- [Authentication and TLS](#authentication-and-tls)
+- [Development](#development)
 
 ## Install
 
@@ -19,9 +39,14 @@ A Go framework for building [NATS](https://nats.io) and JetStream services on to
 go get github.com/loipv/nats-go
 ```
 
-Requires Go 1.26+ and nats-server 2.10+. `KVStore` requires nats-server 2.11+, and atomic batch publishing (`PublishJSAtomicBatch`) requires 2.12+ and a stream with `AllowAtomicPublish`.
+| Requirement | Version |
+|---|---|
+| Go | 1.26+ |
+| nats-server | 2.10+ |
+| `KVStore` (per-key TTL) | nats-server 2.11+ |
+| `PublishJSAtomicBatch` | nats-server 2.12+ and a stream with `AllowAtomicPublish` |
 
-The core `nats` package depends only on nats.go and orbit.go's small `jetstreamext` (for atomic batches). OpenTelemetry (`natsotel`) lives in a subpackage, so you only pull in its dependencies when you import it.
+The core `nats` package depends only on nats.go and orbit.go's small `jetstreamext` (for atomic batches). OpenTelemetry (`natsotel`) and CloudEvents (`cloudevents`) live in subpackages, so you only pull in their dependencies when you import them.
 
 ## Quick start
 
@@ -70,10 +95,6 @@ func main() {
 }
 ```
 
-Handlers are registered with `App` methods and wrapped in `nats.Typed` (`nats.TypedReply` for `SubscribeReply` and service endpoints, `nats.TypedBatch` for `ConsumeBatch`), because Go methods cannot have type parameters. The payload type is inferred from the handler, and passing a handler of the wrong kind does not compile.
-
-`SubscribeReply` covers the usual one request, one response. For anything else, such as answering only some messages of a subject, a `Subscribe` handler can answer by hand with `m.Respond(v)` or `m.RespondError(err)`; the requester sees the same response and `*ServiceError` as from `SubscribeReply`. Both return `nats.ErrNotCore` on a JetStream message (its reply subject is the ack subject) and an error inside `SubscribeReply` or an endpoint, whose return value is the response.
-
 ## Examples
 
 Start a server with `nats-server -js`, then run any example with `go run ./examples/<name>`. Set `NATS_URL` to use another server.
@@ -95,7 +116,42 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [batch-publish](examples/batch-publish) | `PublishJSBatch`, and `PublishJSAtomicBatch` rolling back a batch with a foreign subject |
 | [hooks-events](examples/hooks-events) | `Hook`, `WithOnRetry`, `WithOnDeadLettered`, `WithOnDisconnected` |
 
-## How handler errors are handled
+## Handlers
+
+Handlers are registered with `App` methods before `Start` and wrapped in an adapter that carries the payload type, because Go methods cannot have type parameters. The type is inferred from the handler, and passing a handler of the wrong kind does not compile.
+
+| Method | Receives | Adapter |
+|---|---|---|
+| `Subscribe(subject, h, opts...)` | core NATS messages, with wildcards and queue groups | `nats.Typed` |
+| `SubscribeReply(subject, h, opts...)` | requests; the returned value is the response | `nats.TypedReply` |
+| `Consume(stream, consumer, h, opts...)` | a durable JetStream consumer, pull or push (detected at `Start`) | `nats.Typed` |
+| `ConsumeOrdered(stream, h, opts...)` | a stream in order, through an ephemeral ordered consumer | `nats.Typed` |
+| `ConsumeBatch(stream, consumer, h, opts...)` | slices of messages from a pull consumer | `nats.TypedBatch` |
+| `Service(cfg).Endpoint(name, h, opts...)` | NATS micro endpoint requests | `nats.TypedReply` |
+
+Payloads are decoded with the App's `Codec` (`JSONCodec` by default, `nats.WithCodec` to change it); `[]byte` bypasses the codec in both directions. A payload type with a `Validate() error` method is validated after decoding. `m.Data` is the payload, `m.Header` the headers, `m.Attempt()` the delivery count.
+
+`SubscribeReply` covers the usual one request, one response. For anything else, such as answering only some messages of a subject, a `Subscribe` handler can answer by hand with `m.Respond(v)` or `m.RespondError(err)`; the requester sees the same response and `*ServiceError` as from `SubscribeReply`. Both return `nats.ErrNotCore` on a JetStream message (its reply subject is the ack subject) and an error inside `SubscribeReply` or an endpoint, whose return value is the response.
+
+### Handler options
+
+An option used on a handler kind it does not apply to makes `Start` fail.
+
+| Option | Applies to | Effect |
+|---|---|---|
+| `WithQueue(group)` | `Subscribe`, `SubscribeReply` | join a queue group |
+| `WithConcurrency(n)` | all but `ConsumeBatch` and endpoints | up to `n` calls in parallel (default 1, which keeps order; `ConsumeOrdered` accepts only 1) |
+| `WithTimeout(d)` | all | deadline on the handler's context |
+| `WithMiddleware(mw...)` | all but `ConsumeBatch` | middleware for this handler only |
+| `WithManualAck()` | `Consume`, `ConsumeBatch` | the handler settles messages with `m.Ack()`, `m.Nak()`, `m.NakWithDelay(d)`, `m.Term()`, `m.InProgress()` |
+| `WithMaxAttempts(n)`, `WithBackoff(b)`, `WithDLQ(subject)` | all | [retry and dead-lettering](#retry-and-dlq) |
+| `WithAutoInProgress()` | `Consume`, `ConsumeBatch` | keep the ack wait from expiring while the handler runs |
+| `WithPullMaxMessages(n)` | `Consume` on a pull consumer, `ConsumeOrdered` | messages buffered by the client |
+| `WithFilterSubjects(s...)`, `WithDeliverPolicy(p)` | `ConsumeOrdered` | subjects and start position |
+| `WithBatchSize(n)`, `WithBatchWait(d)` | `ConsumeBatch` | batch size (default 100) and fill wait (default 1s) |
+| `WithEndpointSubject(s)`, `WithEndpointMetadata(m)` | endpoints | endpoint subject and metadata |
+
+### Errors
 
 | Handler returns | JetStream message | Retry | DLQ | Reply |
 |---|---|---|---|---|
@@ -106,9 +162,123 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 
 Every `Term` carries the first line of the error as its reason, reported by the server in the `$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED` advisory. Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `SubscribeReply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
 
-With `nats.WithManualAck()` the handler acks itself via `m.Ack()`, `m.Nak()`, `m.NakWithDelay(d)`, `m.Term()` or `m.InProgress()`.
+## Publishing
 
-A payload type with a `Validate() error` method is validated after decoding.
+```go
+err := app.Publish(ctx, "orders.created", order)                          // fire-and-forget
+var inv Invoice
+_, err = app.Request(ctx, "billing.get", GetInvoice{ID: "42"}, &inv)       // waits for the reply and decodes it
+ack, err := app.PublishJS(ctx, "orders.created", order, nats.WithMsgID(order.ID)) // waits for the stream's ack
+```
+
+A responder that failed comes back from `Request` as `*nats.ServiceError` with its code. Publishing works from `Start` until every handler has stopped during `Shutdown`, and returns `nats.ErrNotRunning` outside that window.
+
+| Option | Effect |
+|---|---|
+| `WithHeader(h)` | headers of the message |
+| `WithMsgID(id)` | `Nats-Msg-Id`: the stream drops an ID it has seen within its `Duplicates` window |
+| `WithExpectStream(name)`, `WithExpectLastSeq(seq)`, `WithExpectLastSubjectSeq(seq)` | optimistic concurrency checks done by the server |
+| `WithJSPublishOpts(opts...)` | any other `jetstream.PublishOpt`, such as `jetstream.WithMsgTTL`; `PublishJS` only |
+
+The JetStream options are rejected by `Publish` and `Request`.
+
+### Batch publishing
+
+```go
+acks, err := app.PublishJSBatch(ctx, []nats.BatchMsg{
+	{Subject: "orders.created", Data: o1, Opts: []nats.PubOption{nats.WithMsgID("o1")}},
+	{Subject: "orders.created", Data: o2},
+})
+var be *nats.PublishBatchError
+if errors.As(err, &be) {
+	for i, e := range be.Failed { /* message i failed */ }
+}
+```
+
+`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the bare context error means the outcome is unknown: the message may have been stored. Once `ctx` is cancelled or expires no further message is started, and those entries read `nats: batch message N not sent: ...`. Other errors read `nats: batch message N: ...`. A publish middleware that calls `next` and then returns an error marks that message failed with its error, although it was sent. A message that cannot be encoded fails the whole call before anything is sent. Beyond about 4000 unacknowledged messages in flight a send stalls for up to 200ms and then fails with `jetstream.ErrTooManyStalledMsgs` (definitely not stored), so split bigger batches; an ack that never arrives fails with `jetstream.ErrAsyncPublishTimeout` after 30s. Storage order is not strictly guaranteed: jetstream resends a message after a no-responders reply, which can land it behind later ones.
+
+For all-or-nothing publishing use `PublishJSAtomicBatch`:
+
+```go
+ack, err := app.PublishJSAtomicBatch(ctx, []nats.BatchMsg{
+	{Subject: "orders.created", Data: order},
+	{Subject: "orders.items", Data: items},
+})
+```
+
+The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. A `WithExpectLastSeq` option only makes sense on the first message of the batch.
+
+Both batch calls reject `nats.WithJSPublishOpts`, which passes any other `jetstream.PublishOpt` (such as `jetstream.WithMsgTTL`) to `PublishJS` only: those options are not headers, so they cannot travel with a built message.
+
+## Middleware and extensions
+
+A middleware wraps a handler; a publish middleware wraps every outgoing message:
+
+```go
+// package nats
+type Handler func(ctx context.Context, m *RawMsg) error
+type Middleware func(Handler) Handler
+
+type PublishFunc func(ctx context.Context, m *RawMsg) error
+type PublishMiddleware func(PublishFunc) PublishFunc
+```
+
+| Register with | Applies to |
+|---|---|
+| `app.Use(mw...)` | every handler |
+| `nats.WithMiddleware(mw...)` | one handler, inside the app middleware |
+| `app.UsePublish(mw...)` | every `Publish`, `Request`, `PublishJS` and each message of a batch |
+
+The first middleware registered is the outermost: it runs first on the way in and last on the way out. Built in: `nats.Recover()`, `nats.Logger(l)` and `nats.Idempotent(store)`; `natsotel` and `cloudevents` are built on the same API.
+
+```go
+func RequireTenant() nats.Middleware {
+	return func(next nats.Handler) nats.Handler {
+		return func(ctx context.Context, m *nats.RawMsg) error {
+			t := m.Header.Get("X-Tenant")
+			if t == "" {
+				return nats.Terminal(errors.New("missing tenant")) // never retried
+			}
+			return next(context.WithValue(ctx, tenantKey{}, t), m)
+		}
+	}
+}
+
+app.Use(nats.Recover(), RequireTenant())
+```
+
+An error returned by a middleware is handled like a handler error. Middleware does not apply to `ConsumeBatch`, and `Use`, `UsePublish` and `Hook` called after `Start` are ignored and logged.
+
+A reusable extension is a function that takes the `*nats.App` and registers what it needs: middleware, a [hook](#hooks) for resources tied to the App's lifetime, and [event callbacks](#events) passed to `New`. These interfaces can also be replaced:
+
+| Extension point | Default | Replace with |
+|---|---|---|
+| `Codec` (`Marshal`, `Unmarshal`) via `WithCodec` | `JSONCodec` | protobuf, msgpack, ... |
+| `IdempotencyStore` (`Begin`, `Complete`, `Abort`) | `MemoryStore`, `KVStore` | Redis, a database, ... |
+| `*slog.Logger` via `WithLogger` | `slog.Default()` | any `slog.Handler` |
+| `app.Conn()`, `app.JetStream()` | | direct nats.go access |
+
+## Streams and consumers
+
+`app.Stream` and `app.Consumer` are synced with the server at `Start`, according to a `ProvisionMode`:
+
+| Mode | Missing | Exists, differs |
+|---|---|---|
+| `nats.Upsert` (default) | created | updated; a change the server rejects fails `Start` |
+| `nats.CreateOnly` | created | left as is, logged at Warn (`nats: config drift`) |
+| `nats.Verify` | `Start` fails | `Start` fails with `nats.ErrConfigDrift` |
+
+Set the default with `nats.WithProvision` and override it per declaration. When several services declare one stream, let its owner `Upsert` and the others `Verify`, so they cannot overwrite each other:
+
+```go
+app, _ := nats.New(nats.WithProvision(nats.Verify)) // other services' streams are only checked
+// This service owns ORDERS.
+app.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}}, nats.Upsert)
+// PAYMENTS belongs to another service: Start fails if it is missing or differs.
+app.Stream(jetstream.StreamConfig{Name: "PAYMENTS", Subjects: []string{"payments.>"}})
+```
+
+`CreateOnly` and `Verify` compare only the fields set in the declaration, since the server fills defaults into the rest; `Metadata` only needs the declared keys. So a declaration cannot require a field to be zero, including the zero-valued defaults `FileStorage`, `LimitsPolicy`, `DiscardOld`, `AckExplicitPolicy` and `DeliverAllPolicy`. Fields the server overrides are skipped (a consumer's `AckWait` when `BackOff` is set, `StreamSource.Domain`). Nothing is ever deleted, and the `KVStore` bucket is always created or updated.
 
 ## Reliability
 
@@ -158,28 +328,6 @@ app.ConsumeBatch("ORDERS", "loader", nats.TypedBatch(func(ctx context.Context, m
 
 Any other error fails the whole batch. A non-nil `*BatchError` is found even inside `errors.Join` or a wrapper, and then fails only its listed indexes while the rest are acked. Only a typed-nil `*BatchError` returned directly counts as no error. `ConsumeBatch` needs a pull consumer, and middleware does not apply to it. With `nats.WithManualAck()` the handler settles each message itself (`m.Ack()` and friends) and a returned error is only logged; messages that fail to decode are still settled by the library.
 
-### Provisioning
-
-`app.Stream` and `app.Consumer` are synced with the server at `Start`, according to a `ProvisionMode`:
-
-| Mode | Missing | Exists, differs |
-|---|---|---|
-| `nats.Upsert` (default) | created | updated; a change the server rejects fails `Start` |
-| `nats.CreateOnly` | created | left as is, logged at Warn (`nats: config drift`) |
-| `nats.Verify` | `Start` fails | `Start` fails with `nats.ErrConfigDrift` |
-
-Set the default with `nats.WithProvision` and override it per declaration. When several services declare one stream, let its owner `Upsert` and the others `Verify`, so they cannot overwrite each other:
-
-```go
-app, _ := nats.New(nats.WithProvision(nats.Verify)) // other services' streams are only checked
-// This service owns ORDERS.
-app.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}}, nats.Upsert)
-// PAYMENTS belongs to another service: Start fails if it is missing or differs.
-app.Stream(jetstream.StreamConfig{Name: "PAYMENTS", Subjects: []string{"payments.>"}})
-```
-
-`CreateOnly` and `Verify` compare only the fields set in the declaration, since the server fills defaults into the rest; `Metadata` only needs the declared keys. So a declaration cannot require a field to be zero, including the zero-valued defaults `FileStorage`, `LimitsPolicy`, `DiscardOld`, `AckExplicitPolicy` and `DeliverAllPolicy`. Fields the server overrides are skipped (a consumer's `AckWait` when `BackOff` is set, `StreamSource.Domain`). Nothing is ever deleted, and the `KVStore` bucket is always created or updated.
-
 ### Supervisor
 
 `Consume` and `ConsumeBatch` handlers restart when their consumer or stream is deleted: the handler reports `restarting` (and `Health` reports `degraded`), recreates the stream and consumer if they were declared with `app.Stream` and `app.Consumer` (except under `Verify`, where it waits for their owner), and resumes, waiting `WithRestartBackoff` (default `ExponentialBackoff(1s, 30s)`) between attempts. `HandlerStatus.Restarts` counts restarts. Set `IdleHeartbeat` on push consumers: without it a deleted push consumer cannot be detected.
@@ -209,34 +357,6 @@ inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMe
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.
 - On shutdown, every request delivered to an endpoint is still answered. The one being handled when `Shutdown` begins can publish through the `App`; requests queued behind it, or delivered while micro drains its subscriptions, cannot, because publishing closes once no request is in flight.
 - A middleware that does not call `next` makes the endpoint send an empty response.
-
-### Batch publishing
-
-```go
-acks, err := app.PublishJSBatch(ctx, []nats.BatchMsg{
-	{Subject: "orders.created", Data: o1, Opts: []nats.PubOption{nats.WithMsgID("o1")}},
-	{Subject: "orders.created", Data: o2},
-})
-var be *nats.PublishBatchError
-if errors.As(err, &be) {
-	for i, e := range be.Failed { /* message i failed */ }
-}
-```
-
-`PublishJSBatch` sends the messages in order without waiting for each ack, then waits for all of them. It is **not atomic**: `acks[i]` is non-nil for every message known to be stored, and `PublishBatchError.Failed` lists the others by index. A `Failed` entry whose error is the bare context error means the outcome is unknown: the message may have been stored. Once `ctx` is cancelled or expires no further message is started, and those entries read `nats: batch message N not sent: ...`. Other errors read `nats: batch message N: ...`. A publish middleware that calls `next` and then returns an error marks that message failed with its error, although it was sent. A message that cannot be encoded fails the whole call before anything is sent. Beyond about 4000 unacknowledged messages in flight a send stalls for up to 200ms and then fails with `jetstream.ErrTooManyStalledMsgs` (definitely not stored), so split bigger batches; an ack that never arrives fails with `jetstream.ErrAsyncPublishTimeout` after 30s. Storage order is not strictly guaranteed: jetstream resends a message after a no-responders reply, which can land it behind later ones.
-
-For all-or-nothing publishing use `PublishJSAtomicBatch`:
-
-```go
-ack, err := app.PublishJSAtomicBatch(ctx, []nats.BatchMsg{
-	{Subject: "orders.created", Data: order},
-	{Subject: "orders.items", Data: items},
-})
-```
-
-The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. A `WithExpectLastSeq` option only makes sense on the first message of the batch.
-
-Both batch calls reject `nats.WithJSPublishOpts`, which passes any other `jetstream.PublishOpt` (such as `jetstream.WithMsgTTL`) to `PublishJS` only: those options are not headers, so they cannot travel with a built message.
 
 ### OpenTelemetry
 
@@ -277,11 +397,11 @@ CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and
 
 ## Lifecycle
 
-- `Start(ctx)` connects, creates or updates declared streams and consumers (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned, and `Start` can then be called again. Registration mistakes (including `WithPullMaxMessages(n)` with `n < 1`, a negative `WithTimeout` and an invalid `WithDLQ` subject) are returned here too. `Start` does not hold a lock while it connects, so `Health()` answers meanwhile with `ready` false, and `Conn()` and `JetStream()` return nil unless the app is started or starting.
+- `Start(ctx)` connects, syncs declared streams and consumers according to their [provision mode](#streams-and-consumers) (never deletes them), checks that consumed consumers exist and starts every handler. The first failure stops everything and is returned, and `Start` can then be called again. Registration mistakes (including `WithPullMaxMessages(n)` with `n < 1`, a negative `WithTimeout` and an invalid `WithDLQ` subject) are returned here too. `Start` does not hold a lock while it connects, so `Health()` answers meanwhile with `ready` false, and `Conn()` and `JetStream()` return nil unless the app is started or starting.
 - `Shutdown(ctx)` stops intake, waits for in-flight handlers and drains the connection within the context deadline. Unacked JetStream messages are redelivered by the server. A second `Shutdown` that starts while the first is running waits for it and returns its error; a `Shutdown` during `Start` waits for `Start`, or cancels it when its `ctx` ends first.
 - `Run(ctx)` is `Start`, wait for `ctx` or for the connection to be closed for good, then `Shutdown` bounded by `WithShutdownTimeout` (30s by default). If that `Shutdown` fails, `Run` returns its error; otherwise, when the connection closed for good, `Run` returns an error wrapping nats.go's `ErrConnectionClosed`.
 - The connection reconnects forever by default (`nats.WithNATSOptions(natsio.MaxReconnects(n))` to change it); while reconnecting, health reports `degraded`.
-- `Health()` and `HealthHandler()` report the connection and every handler; mount the handler on your own HTTP server.
+- `Health()` returns a `Report`: `Status` (`ok`, `degraded` while reconnecting or while a handler is restarting or has stopped, `down` before `Start`, after `Shutdown` or once the connection is closed), the connection state, `Ready`, and one `HandlerStatus` per handler. `HealthHandler()` serves it as JSON with 200 when `ok` and 503 otherwise; mount it on your own HTTP server.
 
 ### Hooks
 
@@ -345,6 +465,19 @@ import natsio "github.com/nats-io/nats.go"
 
 nats.WithNATSOptions(natsio.MaxReconnects(-1))
 ```
+
+## Development
+
+The tests start an embedded nats-server, so no server is needed:
+
+```sh
+go test -race ./...                       # all tests
+go test -race -run TestProvisionVerify ./nats/  # one test
+go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+```
+
+CI runs the same commands on Go 1.26 and the latest stable release. The examples need a server: `nats-server -js`, then `go run ./examples/<name>`.
 
 ## Status
 
