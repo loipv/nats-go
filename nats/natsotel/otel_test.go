@@ -3,6 +3,7 @@ package natsotel_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -140,6 +141,30 @@ func TestErrorMarksSpanAndDuplicateDoesNot(t *testing.T) {
 	}
 	if s := spanNamed(t, sr, "process d"); s.Status().Code == codes.Error || !attrBool(s, "messaging.nats.duplicate") {
 		t.Fatal(s.Status())
+	}
+}
+
+type codeError struct{}
+
+func (codeError) Error() string { return "code" }
+
+func TestErrorTypeSkipsFmtWrappers(t *testing.T) {
+	_, sr, _, _, opts := setup(t)
+	for i, c := range []struct {
+		err  error
+		want string
+	}{
+		{codeError{}, "natsotel_test.codeError"},
+		{fmt.Errorf("a: %w", fmt.Errorf("b: %w", codeError{})), "natsotel_test.codeError"},
+		{fmt.Errorf("a: %w", errors.New("x")), "*errors.errorString"},
+		{fmt.Errorf("%w %w", codeError{}, errors.New("x")), "*fmt.wrapErrors"},
+	} {
+		subject := fmt.Sprint("e", i)
+		h := natsotel.Middleware(opts...)(func(context.Context, *nats.RawMsg) error { return c.err })
+		_ = h(context.Background(), &nats.RawMsg{Subject: subject})
+		if got := attrString(spanNamed(t, sr, "process "+subject), "error.type"); got != c.want {
+			t.Errorf("error.type of %v = %q, want %q", c.err, got, c.want)
+		}
 	}
 }
 
