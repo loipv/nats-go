@@ -74,6 +74,13 @@ func registerCore(app *App, kind handlerKind, subject string, bind func(Codec) H
 	if err == nil && bind == nil {
 		err = fmt.Errorf("nats: %s %q: nil handler", kind, subject)
 	}
+	if err == nil {
+		def := ""
+		if cfg.queue != "" {
+			def = subject + "@" + cfg.queue
+		}
+		err = app.idemScope(&cfg, kind, subject, def)
+	}
 	if err != nil {
 		app.addErr(err)
 		return

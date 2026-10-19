@@ -101,6 +101,10 @@ func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler
 	if err == nil && h.bind == nil {
 		err = fmt.Errorf("nats: endpoint %q: nil handler", name)
 	}
+	if err == nil {
+		path := endpointReg{name: name, groups: groups}.healthName(s.reg.cfg.Name)
+		err = s.app.idemScope(&cfg, kindEndpoint, path, path)
+	}
 	if err != nil {
 		s.app.addErr(fmt.Errorf("nats: service %q: %w", s.reg.cfg.Name, err))
 		return

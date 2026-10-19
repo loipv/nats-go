@@ -19,29 +19,163 @@ type IdempotencyStore interface {
 	Abort(ctx context.Context, key string) error
 }
 
+// idemConfig is a set of idempotency settings. A zero field is unset: over
+// fills it from a lower level.
 type idemConfig struct {
+	store    IdempotencyStore
 	key      func(*RawMsg) string
 	claimTTL time.Duration
 	doneTTL  time.Duration
+	// err is the first invalid option value.
+	err error
 }
 
-// IdempotencyOption configures Idempotent.
+// idemDefaults are the library defaults, below App.Idempotency and
+// WithIdempotency.
+var idemDefaults = idemConfig{
+	key:      func(m *RawMsg) string { return m.Header.Get(jetstream.MsgIDHeader) },
+	claimTTL: time.Minute,
+	doneTTL:  24 * time.Hour,
+}
+
+// over returns c with its unset fields taken from base.
+func (c idemConfig) over(base idemConfig) idemConfig {
+	if c.store == nil {
+		c.store = base.store
+	}
+	if c.key == nil {
+		c.key = base.key
+	}
+	if c.claimTTL == 0 {
+		c.claimTTL = base.claimTTL
+	}
+	if c.doneTTL == 0 {
+		c.doneTTL = base.doneTTL
+	}
+	return c
+}
+
+func (c *idemConfig) fail(err error) {
+	if c.err == nil {
+		c.err = err
+	}
+}
+
+func (c *idemConfig) setTTL(dst *time.Duration, d time.Duration) {
+	if d <= 0 {
+		c.fail(fmt.Errorf("non-positive TTL %s", d))
+		return
+	}
+	*dst = d
+}
+
+// IdempotencyOption configures App.Idempotency and WithIdempotency.
 type IdempotencyOption func(*idemConfig)
+
+// WithIdempotencyStore sets the store that records processed keys. It
+// overrides the store given to App.Idempotency.
+func WithIdempotencyStore(s IdempotencyStore) IdempotencyOption {
+	return func(c *idemConfig) {
+		if s == nil {
+			c.fail(errors.New("nil store"))
+			return
+		}
+		c.store = s
+	}
+}
 
 // WithIdempotencyKey derives the dedup key from a message. The default is the
 // Nats-Msg-Id header. An empty key disables dedup for that message.
 func WithIdempotencyKey(fn func(*RawMsg) string) IdempotencyOption {
-	return func(c *idemConfig) { c.key = fn }
+	return func(c *idemConfig) {
+		if fn == nil {
+			c.fail(errors.New("nil key function"))
+			return
+		}
+		c.key = fn
+	}
 }
 
 // WithClaimTTL sets how long an in-flight claim lasts (default 1 minute). It must
 // exceed the worst-case handler duration: claims are released by key, without
 // an ownership token, so a handler that outlives its claim can have its
 // duplicate admitted and its claim released by the other delivery.
-func WithClaimTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.claimTTL = d } }
+func WithClaimTTL(d time.Duration) IdempotencyOption {
+	return func(c *idemConfig) { c.setTTL(&c.claimTTL, d) }
+}
 
 // WithDoneTTL sets how long a completed key is remembered (default 24 hours).
-func WithDoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig) { c.doneTTL = d } }
+func WithDoneTTL(d time.Duration) IdempotencyOption {
+	return func(c *idemConfig) { c.setTTL(&c.doneTTL, d) }
+}
+
+// Idempotency sets the App's idempotency defaults: store, and opts applied
+// after it. It does not enable idempotency on any handler; WithIdempotency
+// does, and its options override these field by field. It may be called
+// before or after the handlers are registered, but only once.
+func (a *App) Idempotency(store IdempotencyStore, opts ...IdempotencyOption) {
+	c := &idemConfig{store: store}
+	for _, o := range opts {
+		o(c)
+	}
+	if c.store == nil {
+		c.fail(errors.New("nil store"))
+	}
+	if c.err != nil {
+		a.addErr(fmt.Errorf("nats: App.Idempotency: %w", c.err))
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lateLocked() {
+		return
+	}
+	if a.idem != nil {
+		a.regErrs = append(a.regErrs, errors.New("nats: App.Idempotency called twice"))
+		return
+	}
+	a.idem = c
+}
+
+// WithIdempotency enables idempotency for the handler. opts override the
+// settings of App.Idempotency field by field. Not allowed on ConsumeBatch.
+func WithIdempotency(opts ...IdempotencyOption) HandlerOption {
+	return func(c *handlerConfig) {
+		ic := &idemConfig{}
+		for _, o := range opts {
+			o(ic)
+		}
+		c.idem = ic
+		c.used = append(c.used, "WithIdempotency")
+	}
+}
+
+// WithIdempotencyScope sets the scope that keeps this handler's keys apart
+// from other handlers' keys, replacing the default scope.
+func WithIdempotencyScope(scope string) HandlerOption {
+	return func(c *handlerConfig) { c.idemScope = scope; c.used = append(c.used, "WithIdempotencyScope") }
+}
+
+// idemScope resolves the scope of handler name, using def unless
+// WithIdempotencyScope set one, and records a handler that relies on the
+// App's store.
+func (a *App) idemScope(c *handlerConfig, kind handlerKind, name, def string) error {
+	if c.idem == nil {
+		return nil
+	}
+	if c.idemScope == "" {
+		c.idemScope = def
+	}
+	if c.idemScope == "" {
+		return fmt.Errorf("nats: %s %q: WithIdempotency needs WithIdempotencyScope: no default scope", kind, name)
+	}
+	if c.idem.store == nil {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.idemNoStore = append(a.idemNoStore, fmt.Sprintf("%s %q", kind, name))
+	}
+	return nil
+}
 
 // Idempotent skips messages whose key was already processed successfully.
 // It returns Terminal(ErrDuplicate) for a duplicate without calling the
@@ -59,15 +193,12 @@ func WithDoneTTL(d time.Duration) IdempotencyOption { return func(c *idemConfig)
 //
 // It panics if store is nil or a TTL is not positive.
 func Idempotent(store IdempotencyStore, opts ...IdempotencyOption) Middleware {
-	c := idemConfig{
-		key:      func(m *RawMsg) string { return m.Header.Get(jetstream.MsgIDHeader) },
-		claimTTL: time.Minute,
-		doneTTL:  24 * time.Hour,
-	}
+	c := idemConfig{store: store}
 	for _, o := range opts {
 		o(&c)
 	}
-	if store == nil || c.key == nil || c.claimTTL <= 0 || c.doneTTL <= 0 {
+	c = c.over(idemDefaults)
+	if c.store == nil || c.err != nil {
 		panic("nats: Idempotent needs a store, a key function and positive TTLs")
 	}
 	return func(next Handler) Handler {

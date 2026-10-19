@@ -46,7 +46,11 @@ type handlerConfig struct {
 	// endpointSubject and endpointMetadata are passed to micro by Endpoint.
 	endpointSubject  string
 	endpointMetadata map[string]string
-	used             []string
+	// idem holds the WithIdempotency overrides; nil when idempotency is off.
+	// idemScope is resolved at registration (App.idemScope).
+	idem      *idemConfig
+	idemScope string
+	used      []string
 }
 
 // allowedKinds returns the handler kinds a restricted option applies to,
@@ -71,6 +75,8 @@ func allowedKinds(option string) []handlerKind {
 		return []handlerKind{kindBatch}
 	case "WithEndpointSubject", "WithEndpointMetadata":
 		return []handlerKind{kindEndpoint}
+	case "WithIdempotency":
+		return []handlerKind{kindSubscribe, kindReply, kindConsume, kindOrdered, kindEndpoint}
 	}
 	return nil
 }
@@ -115,6 +121,17 @@ func newHandlerConfig(kind handlerKind, opts []HandlerOption) (handlerConfig, er
 			if slices.Contains(c.used, name) {
 				return c, fmt.Errorf("nats: option %s not allowed with WithManualAck", name)
 			}
+		}
+	}
+	if c.idem != nil && c.idem.err != nil {
+		return c, fmt.Errorf("nats: WithIdempotency: %w", c.idem.err)
+	}
+	if slices.Contains(c.used, "WithIdempotencyScope") {
+		if c.idem == nil {
+			return c, errors.New("nats: WithIdempotencyScope requires WithIdempotency")
+		}
+		if c.idemScope == "" {
+			return c, errors.New("nats: WithIdempotencyScope: empty scope")
 		}
 	}
 	if kind == kindOrdered && c.concurrency > 1 {

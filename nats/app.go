@@ -34,6 +34,10 @@ type App struct {
 	mws         []Middleware
 	hooks       []Hook
 	pubMws      []PublishMiddleware
+	// idem is set by App.Idempotency. idemNoStore names the handlers whose
+	// WithIdempotency has no store of its own, for Start to check.
+	idem        *idemConfig
+	idemNoStore []string
 	runners     []runner
 	// shutdownDone is set by the first Shutdown and closed when it returns
 	// shutdownErr.
@@ -260,6 +264,11 @@ func (a *App) Start(ctx context.Context) error {
 		return ErrAlreadyStarted
 	}
 	if err := errors.Join(a.regErrs...); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	if len(a.idemNoStore) > 0 && a.idem == nil {
+		err := fmt.Errorf("nats: %s: WithIdempotency needs a store: call App.Idempotency or pass WithIdempotencyStore", a.idemNoStore[0])
 		a.mu.Unlock()
 		return err
 	}

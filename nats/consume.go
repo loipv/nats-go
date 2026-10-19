@@ -29,6 +29,9 @@ func (a *App) Consume(stream, consumer string, h MsgHandler, opts ...HandlerOpti
 	if err == nil && h.bind == nil {
 		err = fmt.Errorf("nats: consume %s/%s: nil handler", stream, consumer)
 	}
+	if err == nil {
+		err = a.idemScope(&cfg, kindConsume, stream+"/"+consumer, stream+"/"+consumer)
+	}
 	if err == nil && !a.claimConsumer(stream+"/"+consumer) {
 		err = fmt.Errorf("nats: duplicate consumer %s/%s", stream, consumer)
 	}
@@ -52,6 +55,9 @@ func (a *App) ConsumeOrdered(stream string, h MsgHandler, opts ...HandlerOption)
 	}
 	if err == nil && h.bind == nil {
 		err = fmt.Errorf("nats: consume ordered %s: nil handler", stream)
+	}
+	if err == nil {
+		err = a.idemScope(&cfg, kindOrdered, stream, "")
 	}
 	if err != nil {
 		a.addErr(err)

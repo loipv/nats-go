@@ -101,3 +101,82 @@ func TestOrderedRejectsConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestIdempotencyConfigErrors(t *testing.T) {
+	s := runServer(t)
+	noop := Typed(func(context.Context, *Msg[[]byte]) error { return nil })
+	reply := TypedReply(func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil })
+	batch := TypedBatch(func(context.Context, []*Msg[[]byte]) error { return nil })
+	st := NewMemoryStore()
+	cases := map[string]struct {
+		register func(a *App)
+		want     []string
+	}{
+		"batch": {func(a *App) {
+			setupStream(t, a)
+			a.ConsumeBatch("ORDERS", "billing", batch, WithIdempotency(WithIdempotencyStore(st)))
+		}, []string{"WithIdempotency not allowed for batch"}},
+		"scope without idempotency": {func(a *App) { a.Subscribe("x", noop, WithIdempotencyScope("s")) }, []string{"WithIdempotencyScope requires WithIdempotency"}},
+		"empty scope": {func(a *App) {
+			a.Subscribe("x", noop, WithIdempotency(WithIdempotencyStore(st)), WithIdempotencyScope(""))
+		}, []string{"WithIdempotencyScope: empty scope"}},
+		"subscribe without queue": {func(a *App) {
+			a.Subscribe("audit.>", noop, WithIdempotency(WithIdempotencyStore(st)))
+		}, []string{"WithIdempotencyScope", `"audit.>"`}},
+		"reply without queue": {func(a *App) {
+			a.SubscribeReply("x", reply, WithIdempotency(WithIdempotencyStore(st)))
+		}, []string{"WithIdempotencyScope"}},
+		"ordered": {func(a *App) {
+			setupStream(t, a)
+			a.ConsumeOrdered("ORDERS", noop, WithIdempotency(WithIdempotencyStore(st)))
+		}, []string{"WithIdempotencyScope"}},
+		"nil store": {func(a *App) {
+			a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(nil)))
+		}, []string{"nil store"}},
+		"nil key": {func(a *App) {
+			a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(st), WithIdempotencyKey(nil)))
+		}, []string{"nil key"}},
+		"zero claim TTL": {func(a *App) {
+			a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(st), WithClaimTTL(0)))
+		}, []string{"TTL"}},
+		"negative done TTL": {func(a *App) {
+			a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(st), WithDoneTTL(-time.Second)))
+		}, []string{"TTL"}},
+		"app nil store":   {func(a *App) { a.Idempotency(nil) }, []string{"App.Idempotency: nil store"}},
+		"app bad option":  {func(a *App) { a.Idempotency(st, WithDoneTTL(0)) }, []string{"App.Idempotency", "TTL"}},
+		"app twice":       {func(a *App) { a.Idempotency(st); a.Idempotency(st) }, []string{"App.Idempotency called twice"}},
+		"no store at all": {func(a *App) { setupStream(t, a); a.Consume("ORDERS", "billing", noop, WithIdempotency()) }, []string{"needs a store", `"ORDERS/billing"`}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := newApp(t, s)
+			c.register(a)
+			err := a.Start(context.Background())
+			_ = a.Shutdown(context.Background())
+			for _, w := range c.want {
+				if err == nil || !strings.Contains(err.Error(), w) {
+					t.Fatalf("Start err = %v, want %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+func TestIdempotencyConfigValid(t *testing.T) {
+	s := runServer(t)
+	noop := Typed(func(context.Context, *Msg[[]byte]) error { return nil })
+	st := NewMemoryStore()
+	a := newApp(t, s)
+	setupStream(t, a)
+	a.Subscribe("x", noop, WithQueue("q"), WithIdempotency(WithIdempotencyStore(st)))
+	a.Subscribe("y", noop, WithIdempotency(), WithIdempotencyScope("y-svc"))
+	a.Consume("ORDERS", "billing", noop, WithIdempotency())
+	a.Idempotency(st) // after the registrations that rely on it
+	start(t, a)
+	a.Idempotency(NewMemoryStore()) // late: ignored
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.idem == nil || a.idem.store != st {
+		t.Fatalf("a.idem = %+v, want the store set before Start", a.idem)
+	}
+}
