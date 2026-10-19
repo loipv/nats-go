@@ -78,7 +78,7 @@ func (r retryConfig) exceeded(attempt int) bool {
 
 // dispose acks, naks or terms a consumed message according to the handler
 // result, publishing it to the DLQ when giving up on it. A duplicate skipped
-// by Idempotent is acked. A term carries the first line of err as its reason,
+// by WithIdempotency is acked. A term carries the first line of err as its reason,
 // which the server reports in the MSG_TERMINATED advisory. An ack failure is
 // logged and reported through WithOnAsyncError; the server redelivers the
 // message after AckWait.
@@ -146,7 +146,7 @@ func (a *App) retryLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConf
 
 // handleLocal runs h with in-process retries and, when the message finally
 // fails, logs it and publishes it to the DLQ if one is set. A duplicate
-// skipped by Idempotent is neither. It returns the final error and whether
+// skipped by WithIdempotency is neither. It returns the final error and whether
 // the message was abandoned.
 func (a *App) handleLocal(ctx context.Context, h Handler, m *RawMsg, rc retryConfig, stopping <-chan struct{}, src dlqSource, log *sink) (abandoned bool, err error) {
 	attempts, abandoned, err := a.retryLocal(ctx, h, m, rc, stopping, log)

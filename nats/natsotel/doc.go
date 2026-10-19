@@ -15,9 +15,9 @@
 // The trace context travels in the message headers, so the "process" span of
 // a handler is a child of the "send" span of the publisher. Every attempt of
 // a message gets its own span: retries inside the process and JetStream
-// redeliveries alike, with the attempt in messaging.nats.attempt. A message
-// skipped by Idempotent is marked messaging.nats.duplicate and is not an
-// error.
+// redeliveries alike, with the attempt in messaging.nats.attempt. A duplicate
+// skipped by nats.WithIdempotency is marked messaging.nats.duplicate and is
+// not an error.
 //
 // Not covered: ConsumeBatch handlers (they have no middleware) and responses
 // sent by SubscribeReply workers or micro endpoints (they bypass PublishMiddleware).

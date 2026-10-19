@@ -108,7 +108,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [middleware](examples/middleware) | `Use`, `WithMiddleware`, `Recover`, `Logger`, `UsePublish` |
 | [service](examples/service) | `Run` with signals, validation, health endpoint, credentials |
 | [retry-dlq](examples/retry-dlq) | `WithMaxAttempts`, `WithBackoff`, `WithDLQ` on a JetStream consumer and a core subscription, `Nats-DLQ-*` headers |
-| [idempotency](examples/idempotency) | `Idempotent` with a `KVStore`, a custom key, one execution for three deliveries |
+| [idempotency](examples/idempotency) | `WithIdempotency` with a `KVStore` and a custom key: two consumers of one stream each run once for three deliveries |
 | [batch](examples/batch) | `ConsumeBatch`, `BatchError`, retry and DLQ per message |
 | [micro-service](examples/micro-service) | `Service`, `Group` and `Endpoint`; found by `nats micro info inventory` |
 | [otel](examples/otel) | `natsotel` middleware: producer and consumer spans in one trace, printed to stdout |
@@ -176,11 +176,11 @@ A responder that failed comes back from `Request` as `*nats.ServiceError` with i
 | Option | Effect |
 |---|---|
 | `WithHeader(h)` | headers of the message |
-| `WithMsgID(id)` | `Nats-Msg-Id`: the stream drops an ID it has seen within its `Duplicates` window |
+| `WithMsgID(id)` | `Nats-Msg-Id`: the stream drops an ID it has seen within its `Duplicates` window; on `Publish` and `Request` it only sets the header, the default key of `WithIdempotency` |
 | `WithExpectStream(name)`, `WithExpectLastSeq(seq)`, `WithExpectLastSubjectSeq(seq)` | optimistic concurrency checks done by the server |
 | `WithJSPublishOpts(opts...)` | any other `jetstream.PublishOpt`, such as `jetstream.WithMsgTTL`; `PublishJS` only |
 
-The JetStream options are rejected by `Publish` and `Request`.
+The JetStream options other than `WithMsgID` are rejected by `Publish` and `Request`.
 
 ### Batch publishing
 
@@ -229,7 +229,7 @@ type PublishMiddleware func(PublishFunc) PublishFunc
 | `nats.WithMiddleware(mw...)` | one handler, inside the app middleware |
 | `app.UsePublish(mw...)` | every `Publish`, `Request`, `PublishJS` and each message of a batch |
 
-The first middleware registered is the outermost: it runs first on the way in and last on the way out. Built in: `nats.Recover()`, `nats.Logger(l)` and `nats.Idempotent(store)`; `natsotel` and `cloudevents` are built on the same API.
+The first middleware registered is the outermost: it runs first on the way in and last on the way out. Built in: `nats.Recover()` and `nats.Logger(l)`; `natsotel` and `cloudevents` are built on the same API.
 
 ```go
 func RequireTenant() nats.Middleware {
@@ -304,14 +304,42 @@ app.Consume("PAYMENTS", "charger", nats.Typed(charge),
 
 ```go
 store := nats.NewKVStore(app, "IDEMPOTENCY") // or nats.NewMemoryStore() for a single instance
-app.Use(nats.Recover(), nats.Idempotent(store,
+app.Idempotency(store, // App-wide settings; enables nothing on its own
 	nats.WithIdempotencyKey(func(m *nats.RawMsg) string { return m.Header.Get("X-Order-Id") }), // default: Nats-Msg-Id
 	nats.WithClaimTTL(time.Minute),
 	nats.WithDoneTTL(24*time.Hour),
-))
+)
+
+app.Consume("ORDERS", "billing", billing, nats.WithIdempotency())   // scope "ORDERS/billing"
+app.Consume("ORDERS", "shipping", shipping, nats.WithIdempotency()) // scope "ORDERS/shipping"
+app.Subscribe("audit.>", audit, nats.WithIdempotency(
+	nats.WithIdempotencyStore(nats.NewMemoryStore()), // overrides the App's store only
+), nats.WithIdempotencyScope("audit-svc"))
 ```
 
-A key is claimed before the handler runs and remembered once it succeeds; duplicates are acked without calling the handler, and a duplicate request gets a 400; a duplicate is never retried or sent to the DLQ. A failing or panicking handler releases the claim so the retry can run. `WithClaimTTL` must exceed the worst-case handler duration, because claims are released by key without an ownership token. `KVStore` is correct across instances, needs nats-server 2.11+ and rounds every TTL up to a whole second. `MemoryStore` is only correct for a single instance. Idempotency does not apply to `ConsumeBatch`.
+`WithIdempotency` turns it on for one handler. Its options override `app.Idempotency` field by field, which overrides the defaults (key `Nats-Msg-Id`, claim TTL 1 minute, done TTL 24 hours). `app.Idempotency` can be called before or after the handlers are registered.
+
+Keys are scoped per handler: handlers that receive the same message each process it once, and the replicas of one handler share their keys.
+
+| Handler | Default scope |
+|---|---|
+| `Consume` | `STREAM/consumer` |
+| `Endpoint` | `service.group.endpoint` |
+| `Subscribe`, `SubscribeReply` with `WithQueue(q)` | `subject@q` |
+| `Subscribe`, `SubscribeReply` without a queue, `ConsumeOrdered` | none: `WithIdempotencyScope` is required |
+
+A key is claimed before the handler runs and remembered once it succeeds; duplicates are acked without calling the handler, and a duplicate request gets a 400; a duplicate is never retried or sent to the DLQ. Idempotency runs inside every middleware, so a middleware sees a duplicate as `ErrDuplicate`. A failing or panicking handler releases the claim so the retry can run. `KVStore` is correct across instances, needs nats-server 2.11+ and rounds every TTL up to a whole second. `MemoryStore` is only correct for a single instance.
+
+`Start` fails when a handler with `WithIdempotency` has no scope or no store, when `WithIdempotencyScope` is used without `WithIdempotency`, on `ConsumeBatch`, and on a nil store, nil key function or non-positive TTL.
+
+Limits:
+
+- It is not exactly-once. A retry runs the side effects of the failed attempt again; a key whose `Complete` fails is only logged and reported, so a later duplicate is admitted; a duplicate arriving after `WithDoneTTL` is processed again.
+- `WithClaimTTL` must exceed the worst-case handler duration, because claims are released by key without an ownership token.
+- A copy whose twin is still being handled fails with `ErrInProgress` and is retried. On JetStream each of those retries counts toward `WithMaxAttempts`, so with a limit and a DLQ the copy can be dead-lettered even though its twin succeeds.
+- A duplicate request gets a 400, not the original response.
+- `ConsumeBatch` has no idempotency.
+- `WithMsgID` on `Publish` or `Request` only sets the header; there is no server-side deduplication outside JetStream.
 
 ### Batch handlers
 
@@ -368,7 +396,7 @@ app.Use(natsotel.Middleware())
 app.UsePublish(natsotel.PublishMiddleware())
 ```
 
-The trace context travels in the message headers: a `send <subject>` producer span is the parent of the `process <subject>` consumer span, across services. Each attempt is its own span, with `messaging.nats.attempt`. The middleware records `messaging.client.operation.duration`, `messaging.client.sent.messages`, `messaging.process.duration` and `messaging.client.consumed.messages`. A message skipped by `Idempotent` is tagged `messaging.nats.duplicate` and is not counted as an error. The global providers and propagator are used unless you pass `WithTracerProvider`, `WithMeterProvider` or `WithPropagator`.
+The trace context travels in the message headers: a `send <subject>` producer span is the parent of the `process <subject>` consumer span, across services. Each attempt is its own span, with `messaging.nats.attempt`. The middleware records `messaging.client.operation.duration`, `messaging.client.sent.messages`, `messaging.process.duration` and `messaging.client.consumed.messages`. A duplicate skipped by `WithIdempotency` is tagged `messaging.nats.duplicate` and is not counted as an error. The global providers and propagator are used unless you pass `WithTracerProvider`, `WithMeterProvider` or `WithPropagator`.
 
 - **Cardinality**: the destination name is the message subject by default, and it is a metric attribute. Subjects that contain identifiers (`orders.42.created`) create one series each. Use `natsotel.WithDestination(func(subject string) string { ... })` to map them to something bounded such as `orders.*.created`.
 - **Not covered**: `ConsumeBatch` handlers (they have no middleware) and responses sent by `SubscribeReply` workers or micro endpoints (they do not go through `PublishMiddleware`). The `send` span of a `PublishJSBatch` message ends when the message is handed to the client and does not see its ack result.

@@ -1,7 +1,9 @@
-// Command idempotency processes an order once even though it is published
-// three times. Idempotent claims a key in a JetStream key-value bucket before
-// the handler runs and remembers it afterwards, so duplicates are acked
-// without running the handler. KVStore needs nats-server 2.11 or later.
+// Command idempotency processes an order once per handler even though it is
+// published three times. WithIdempotency claims a key in a JetStream
+// key-value bucket before the handler runs and remembers it afterwards, so
+// duplicates are acked without running the handler. Keys are scoped per
+// handler: the mailer and the archiver share the bucket and each handle the
+// order once. KVStore needs nats-server 2.11 or later.
 //
 // The messages carry the key in an X-Order-Id header and no Nats-Msg-Id,
 // because the stream would drop those duplicates before the handler saw them.
@@ -33,12 +35,15 @@ func main() {
 	}
 
 	app.Stream(jetstream.StreamConfig{Name: "INVOICES", Subjects: []string{"invoices.>"}})
-	app.Consumer("INVOICES", jetstream.ConsumerConfig{Durable: "mailer", AckPolicy: jetstream.AckExplicitPolicy})
+	for _, name := range []string{"mailer", "archiver"} {
+		app.Consumer("INVOICES", jetstream.ConsumerConfig{Durable: name, AckPolicy: jetstream.AckExplicitPolicy})
+	}
 
 	// The bucket is created or updated on Start. Use NewMemoryStore instead
 	// when a single instance consumes the messages.
 	store := nats.NewKVStore(app, "IDEMPOTENCY")
 	app.Use(nats.Recover())
+	// App-wide settings; each handler opts in with WithIdempotency.
 	app.Idempotency(store,
 		nats.WithIdempotencyKey(func(m *nats.RawMsg) string { return m.Header.Get("X-Order-Id") }),
 		// Must exceed the longest the handler can run.
@@ -46,12 +51,17 @@ func main() {
 		nats.WithDoneTTL(time.Hour),
 	)
 
-	var handled atomic.Int32
+	var mailed, archived atomic.Int32
 	app.Consume("INVOICES", "mailer", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
 		fmt.Printf("sending invoice for order %s\n", m.Data.ID)
-		handled.Add(1)
+		mailed.Add(1)
 		return nil
-	}), nats.WithIdempotency())
+	}), nats.WithIdempotency()) // scope "INVOICES/mailer"
+	app.Consume("INVOICES", "archiver", nats.Typed(func(_ context.Context, m *nats.Msg[Order]) error {
+		fmt.Printf("archiving invoice for order %s\n", m.Data.ID)
+		archived.Add(1)
+		return nil
+	}), nats.WithIdempotency()) // scope "INVOICES/archiver"
 
 	ctx := context.Background()
 	if err := app.Start(ctx); err != nil {
@@ -74,8 +84,15 @@ func main() {
 		last = ack.Sequence
 	}
 
-	// Wait until the consumer has acked all three deliveries.
-	cons, err := app.JetStream().Consumer(ctx, "INVOICES", "mailer")
+	// Wait until both consumers have acked all three deliveries.
+	for _, name := range []string{"mailer", "archiver"} {
+		waitAcked(ctx, app, name, last)
+	}
+	fmt.Printf("mailer ran %d time(s), archiver %d time(s)\n", mailed.Load(), archived.Load())
+}
+
+func waitAcked(ctx context.Context, app *nats.App, consumer string, seq uint64) {
+	cons, err := app.JetStream().Consumer(ctx, "INVOICES", consumer)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -84,17 +101,12 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if info.AckFloor.Stream >= last {
-			break
+		if info.AckFloor.Stream >= seq {
+			return
 		}
 		if time.Now().After(deadline) {
-			log.Fatal("timed out waiting for the consumer")
+			log.Fatalf("timed out waiting for %s", consumer)
 		}
-	}
-	if n := handled.Load(); n == 1 {
-		fmt.Println("processed once")
-	} else {
-		fmt.Printf("processed %d times\n", n)
 	}
 }
 

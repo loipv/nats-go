@@ -165,19 +165,30 @@
 // ConsumeBatch handler runs, so a slow handler is not redelivered; combine it
 // with WithTimeout.
 //
-// Idempotent is a middleware that skips messages whose key (by default the
-// Nats-Msg-Id header, see WithIdempotencyKey) was already processed. It claims the
-// key with an IdempotencyStore, runs the handler, then marks the key done, or
-// releases the claim if the handler fails or panics. Duplicates are acked
-// without calling the handler (with WithManualAck too), and a duplicate request
-// gets a 400; a duplicate is never retried or sent to the DLQ.
+// WithIdempotency makes a handler skip messages whose key (by default the
+// Nats-Msg-Id header, see WithIdempotencyKey) it already processed. It claims
+// the key with an IdempotencyStore, runs the handler, then marks the key
+// done, or releases the claim if the handler fails or panics. App.Idempotency
+// sets App-wide settings without enabling anything; the handler's options
+// override them field by field:
+//
+//	app.Idempotency(nats.NewKVStore(app, "IDEMPOTENCY"))
+//	app.Consume("ORDERS", "billing", billing, nats.WithIdempotency())
+//	app.Consume("ORDERS", "shipping", shipping, nats.WithIdempotency())
+//
+// Keys are scoped per handler, so billing and shipping each process a
+// message once, and the replicas of one handler share their keys. The
+// default scope is STREAM/consumer for Consume, service.group.endpoint for an
+// endpoint and subject@queue for Subscribe and SubscribeReply with WithQueue;
+// without a queue, and for ConsumeOrdered, WithIdempotencyScope is required.
+// Duplicates are acked without calling the handler (with WithManualAck too),
+// and a duplicate request gets a 400; a duplicate is never retried or sent to
+// the DLQ. Idempotency runs inside every middleware.
 // NewMemoryStore is correct for a single instance. NewKVStore keeps the keys in a JetStream
 // key-value bucket and is correct across instances; it needs nats-server 2.11
 // or later and rounds every TTL up to a whole second. WithClaimTTL must exceed
 // the worst-case handler duration, because claims are released by key and
-// carry no owner. Register it after Recover:
-//
-//	app.Use(nats.Recover(), nats.Idempotent(nats.NewKVStore(app, "IDEMPOTENCY")))
+// carry no owner. It is not exactly-once: see WithIdempotency.
 //
 // ConsumeBatch passes up to WithBatchSize messages (waiting at most WithBatchWait) to
 // one call on a pull consumer. Return nil to ack them all, a *BatchError to
@@ -185,8 +196,7 @@
 // non-nil *BatchError is found through errors.Join or a wrapper and fails only
 // its listed indexes, acking the rest; only a typed-nil *BatchError returned
 // directly counts as no error. Failed messages follow the table above.
-// Middleware does not apply to batches, and Idempotent cannot be used with
-// them.
+// Middleware and WithIdempotency do not apply to batches.
 //
 // Consume and ConsumeBatch handlers are supervised: when the consumer or its
 // stream is deleted, the handler goes to the "restarting" state, recreates
@@ -209,7 +219,8 @@
 //
 // App.Publish sends fire-and-forget, App.Request waits for a reply and
 // decodes it into out (a failed responder comes back as *ServiceError) and
-// App.PublishJS waits for the stream's ack, with WithMsgID for deduplication.
+// App.PublishJS waits for the stream's ack, with WithMsgID for deduplication
+// (on Publish and Request, WithMsgID only sets the header).
 // WithJSPublishOpts passes any other jetstream.PublishOpt (such as
 // jetstream.WithMsgTTL) to PublishJS.
 //

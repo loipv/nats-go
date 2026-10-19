@@ -208,7 +208,7 @@ func (r *jsReg) start(_ context.Context, a *App) (runner, error) {
 		if r.cfg.manualAck {
 			switch err := call(); {
 			case errors.Is(err, ErrDuplicate):
-				// Idempotent skipped the handler, so nothing else acks it.
+				// WithIdempotency skipped the handler, so nothing else acks it.
 				log.Debug("nats: duplicate message acked", "subject", raw.Subject)
 				// The handler may have acked it before returning ErrDuplicate.
 				if err := jsMsgFrom(ctx).Ack(); err != nil && !errors.Is(err, jetstream.ErrMsgAlreadyAckd) {
