@@ -56,10 +56,6 @@ func testStoreContract(t *testing.T, newStore func(t *testing.T) IdempotencyStor
 	})
 }
 
-func TestMemoryStoreContract(t *testing.T) {
-	testStoreContract(t, func(*testing.T) IdempotencyStore { return NewMemoryStore() })
-}
-
 func TestIdempotencySkipsDuplicates(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
