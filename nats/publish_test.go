@@ -321,7 +321,7 @@ func TestRequestShortCircuitMiddlewareDoesNotPanic(t *testing.T) {
 	}
 }
 
-func TestPublishJSWithJSPublishOpts(t *testing.T) {
+func TestPublishJSWithJSPublishOptions(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	setupStream(t, a)
@@ -339,7 +339,7 @@ func TestPublishJSWithJSPublishOpts(t *testing.T) {
 	}
 }
 
-func TestJSPublishOptsRejectedOutsidePublishJS(t *testing.T) {
+func TestJSPublishOptionsRejectedOutsidePublishJS(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
 	start(t, a)

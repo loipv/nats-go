@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/nats-io/nats.go/micro"
 
@@ -94,8 +95,16 @@ func main() {
 		return ResetResult{Items: n}, nil
 	}))
 
+	// Start, not Run, so the line below is only printed once the endpoints
+	// are subscribed. Run would print nothing until the app stops.
+	if err := app.Start(ctx); err != nil {
+		log.Fatal(err)
+	}
 	log.Println("inventory 1.0.0 is up; try: nats micro info inventory")
-	if err := app.Run(ctx); err != nil {
+	<-ctx.Done()
+	sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := app.Shutdown(sctx); err != nil {
 		log.Fatal(err)
 	}
 }

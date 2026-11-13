@@ -250,7 +250,7 @@
 //
 // # Integrations
 //
-// Service registers a NATS micro service, found by "nats micro ls|info|stats".
+// App.Service registers a NATS micro service, found by "nats micro ls|info|stats".
 // Endpoint adds typed endpoints to it, or to a Group of it, and works like
 // SubscribeReply: the returned value is encoded and sent back, and an error
 // becomes a micro service error, sent as SubscribeReply sends it, that the
