@@ -129,6 +129,74 @@ func TestConsumeBatchShutdownDeadline(t *testing.T) { // Review Focus #4
 		t.Fatal(err, time.Since(begin))
 	}
 }
+func TestConsumeBatchTimeout(t *testing.T) {
+	a := newApp(t, runServer(t))
+	setupStream(t, a)
+	left := make(chan time.Duration, 1)
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(ctx context.Context, _ []*Msg[order]) error {
+		dl, ok := ctx.Deadline()
+		if !ok {
+			left <- -1
+			return nil
+		}
+		left <- time.Until(dl)
+		return nil
+	}), WithTimeout(50*time.Millisecond), WithBatchWait(100*time.Millisecond))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	if d := recv(t, left); d <= 0 || d > 50*time.Millisecond {
+		t.Fatalf("time left on the handler context = %s, want within (0, 50ms]", d)
+	}
+}
+
+// While the batch handler runs past AckWait, nobody else may get its message.
+func TestConsumeBatchAutoInProgress(t *testing.T) {
+	a := newApp(t, runServer(t))
+	setupStream(t, a) // AckWait 500ms
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	}), WithAutoInProgress(), WithBatchWait(100*time.Millisecond))
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	recv(t, started)
+	c, err := a.JetStream().Consumer(context.Background(), "ORDERS", "billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second fetcher waits more than twice AckWait for a redelivery.
+	b, err := c.Fetch(1, jetstream.FetchMaxWait(1200*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	redelivered := 0
+	for range b.Messages() {
+		redelivered++
+	}
+	close(release)
+	if redelivered != 0 {
+		t.Fatal("the message was redelivered while its handler was still running")
+	}
+	waitFor(t, func() bool { return pendingAcks(t, a, "billing") == 0 })
+}
+
+func TestConsumeBatchPanicRetriesBatch(t *testing.T) {
+	a := newApp(t, runServer(t))
+	setupStream(t, a)
+	var calls atomic.Int32
+	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(context.Context, []*Msg[order]) error {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return nil
+	}), WithBatchWait(100*time.Millisecond), fast)
+	start(t, a)
+	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
+	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
+}
+
 func TestConsumeBatchTypedNilBatchError(t *testing.T) {
 	if (*BatchError)(nil).Error() == "" {
 		t.Fatal("empty message")

@@ -134,6 +134,30 @@ func TestConsumeOrdered(t *testing.T) {
 	}
 }
 
+func TestConsumeOrderedDeliverPolicy(t *testing.T) {
+	s := runServer(t)
+	seed := newApp(t, s)
+	setupStream(t, seed)
+	start(t, seed)
+	for _, id := range []string{"old", "last"} {
+		if _, err := seed.PublishJS(context.Background(), "orders.x", order{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newApp(t, s)
+	got := make(chan string, 3)
+	a.ConsumeOrdered("ORDERS", Typed(func(_ context.Context, m *Msg[order]) error { got <- m.Data.ID; return nil }),
+		WithDeliverPolicy(jetstream.DeliverLastPolicy))
+	start(t, a)
+	if id := recv(t, got); id != "last" {
+		t.Fatalf("first message = %q, want last", id)
+	}
+	_, _ = seed.PublishJS(context.Background(), "orders.x", order{ID: "new"})
+	if id := recv(t, got); id != "new" {
+		t.Fatalf("second message = %q, want new", id)
+	}
+}
+
 func TestConsumeMissingConsumerFailsStart(t *testing.T) {
 	a := newApp(t, runServer(t))
 	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})

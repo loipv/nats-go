@@ -275,6 +275,17 @@ func streamMsgHeader(t *testing.T, a *App, name string, seq uint64, key string) 
 	return m.Header.Get(key)
 }
 
+func TestPublishBatchErrorMessage(t *testing.T) {
+	e := errors.New("x")
+	if got := (&PublishBatchError{Failed: map[int]error{0: e, 2: e}}).Error(); got != "nats: 2 of batch failed" {
+		t.Fatal(got)
+	}
+	var none *PublishBatchError
+	if got := none.Error(); got != "nats: batch failed" {
+		t.Fatal(got)
+	}
+}
+
 func TestPublishJSAtomicBatch(t *testing.T) {
 	a := startAtomic(t, "ATOMIC", "atomic.>", true)
 	msgs := []BatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "atomic.b", Data: 2}, {Subject: "atomic.c", Data: 3}}

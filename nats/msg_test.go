@@ -3,10 +3,12 @@ package nats
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	natsio "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func requestCtx(t *testing.T) context.Context {
@@ -113,8 +115,87 @@ func TestRespondOnHandBuiltMsg(t *testing.T) {
 }
 
 func TestMsgAckOnCoreReturnsErrNotJetStream(t *testing.T) {
-	if err := (&Msg[[]byte]{}).Ack(); !errors.Is(err, ErrNotJetStream) {
+	m := &Msg[[]byte]{}
+	for name, err := range map[string]error{
+		"Ack": m.Ack(), "Nak": m.Nak(), "NakWithDelay": m.NakWithDelay(time.Second),
+		"Term": m.Term(), "InProgress": m.InProgress(),
+	} {
+		if !errors.Is(err, ErrNotJetStream) {
+			t.Errorf("%s on a core message = %v, want ErrNotJetStream", name, err)
+		}
+	}
+}
+
+// manualAck starts an App whose billing handler settles each message itself
+// with settle, on a consumer with the given AckWait, and publishes one message.
+func manualAck(t *testing.T, ackWait time.Duration, settle func(m *Msg[order], call int32) error) (*App, *atomic.Int32) {
+	t.Helper()
+	a := newApp(t, runServer(t))
+	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
+	a.Consumer("ORDERS", jetstream.ConsumerConfig{Durable: "billing", AckPolicy: jetstream.AckExplicitPolicy, AckWait: ackWait})
+	var calls atomic.Int32
+	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error {
+		return settle(m, calls.Add(1))
+	}), WithManualAck())
+	start(t, a)
+	if _, err := a.PublishJS(context.Background(), "orders.x", order{ID: "1"}); err != nil {
 		t.Fatal(err)
+	}
+	return a, &calls
+}
+
+// The Nak tests use an AckWait far beyond the test's deadline, so only the nak
+// can cause the second delivery.
+func TestMsgNak(t *testing.T) {
+	a, calls := manualAck(t, 30*time.Second, func(m *Msg[order], call int32) error {
+		if call == 1 {
+			return m.Nak()
+		}
+		return m.Ack()
+	})
+	waitFor(t, func() bool { return calls.Load() == 2 && pendingAcks(t, a, "billing") == 0 })
+}
+
+func TestMsgNakWithDelay(t *testing.T) {
+	var first, second atomic.Int64
+	_, calls := manualAck(t, 30*time.Second, func(m *Msg[order], call int32) error {
+		if call == 1 {
+			first.Store(time.Now().UnixNano())
+			return m.NakWithDelay(300 * time.Millisecond)
+		}
+		second.Store(time.Now().UnixNano())
+		return m.Ack()
+	})
+	waitFor(t, func() bool { return calls.Load() == 2 })
+	if gap := time.Duration(second.Load() - first.Load()); gap < 300*time.Millisecond {
+		t.Fatalf("redelivered after %s, want at least 300ms", gap)
+	}
+}
+
+func TestMsgTerm(t *testing.T) {
+	a, calls := manualAck(t, 500*time.Millisecond, func(m *Msg[order], _ int32) error { return m.Term() })
+	// Only an ack or a term clears the pending message; the handler never acks.
+	waitFor(t, func() bool { return calls.Load() == 1 && pendingAcks(t, a, "billing") == 0 })
+	if n := delivered(t, a, "billing"); n != 1 {
+		t.Fatalf("delivered %d times, want 1", n)
+	}
+}
+
+func TestMsgInProgress(t *testing.T) {
+	// The handler runs for 800ms, past the consumer's 500ms AckWait, and keeps
+	// the message from being redelivered by signalling progress.
+	a, calls := manualAck(t, 500*time.Millisecond, func(m *Msg[order], _ int32) error {
+		for range 4 {
+			time.Sleep(200 * time.Millisecond)
+			if err := m.InProgress(); err != nil {
+				return err
+			}
+		}
+		return m.Ack()
+	})
+	waitFor(t, func() bool { return calls.Load() >= 1 && pendingAcks(t, a, "billing") == 0 })
+	if c, n := calls.Load(), delivered(t, a, "billing"); c != 1 || n != 1 {
+		t.Fatalf("handler ran %d times, delivered %d times, want 1 and 1", c, n)
 	}
 }
 
