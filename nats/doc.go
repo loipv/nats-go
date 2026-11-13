@@ -239,8 +239,10 @@
 // # Middleware
 //
 // Middleware wraps handlers on raw messages, before decoding: App.Use for
-// every handler, WithMiddleware for one. Recover and Logger are provided. PublishMiddleware
-// wraps every outgoing message, registered with App.UsePublish.
+// every handler, WithMiddleware for one. Recover and Logger are provided;
+// Logger is an access log, one Debug line per message with its duration (the
+// App itself logs failures at Error). PublishMiddleware wraps every outgoing
+// message, registered with App.UsePublish.
 //
 // # Integrations
 //

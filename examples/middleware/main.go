@@ -23,7 +23,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// App middleware wraps every handler, first one outermost.
+	// App middleware wraps every handler, first one outermost. Logger adds one
+	// Debug line per message with its duration; failures are logged by the App.
 	app.Use(nats.Recover(), nats.Logger(logger))
 
 	// Publish middleware runs on every outgoing message.

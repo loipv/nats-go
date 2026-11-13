@@ -234,7 +234,7 @@ type PublishMiddleware func(PublishFunc) PublishFunc
 | `nats.WithMiddleware(mw...)` | one handler, inside the app middleware |
 | `app.UsePublish(mw...)` | every `Publish`, `Request`, `PublishJS` and each message of a batch |
 
-The first middleware registered is the outermost: it runs first on the way in and last on the way out. Built in: `nats.Recover()` and `nats.Logger(l)`; `natsotel` and `cloudevents` are built on the same API.
+The first middleware registered is the outermost: it runs first on the way in and last on the way out. Built in: `nats.Recover()` and `nats.Logger(l)`, an access log that writes one Debug line per message (`nats: handled`, with the duration and the error if any; the App itself logs failures at Error); `natsotel` and `cloudevents` are built on the same API.
 
 ```go
 func RequireTenant() nats.Middleware {

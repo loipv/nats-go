@@ -3,6 +3,7 @@ package nats
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -64,7 +65,93 @@ func TestLoggerDuplicateAtDebug(t *testing.T) {
 	_ = a.Publish(context.Background(), "dup", 1)
 	recv(t, done)
 	waitFor(t, func() bool { return strings.Contains(buf.String(), "nats: duplicate skipped") })
-	if out := buf.String(); !strings.Contains(out, "level=DEBUG") || strings.Contains(out, "level=ERROR") {
+	if out := buf.String(); !strings.Contains(out, "level=DEBUG") || strings.Contains(out, "level=ERROR") || strings.Contains(out, "nats: handled") {
 		t.Fatal(out)
+	}
+}
+
+// recorded is one log record and the context it was logged with.
+type recorded struct {
+	ctx context.Context
+	rec slog.Record
+}
+
+// recorder is a slog.Handler that keeps every record at every level.
+type recorder struct {
+	mu   sync.Mutex
+	recs []recorded
+}
+
+func (r *recorder) Enabled(context.Context, slog.Level) bool { return true }
+func (r *recorder) WithAttrs([]slog.Attr) slog.Handler       { return r }
+func (r *recorder) WithGroup(string) slog.Handler            { return r }
+
+func (r *recorder) Handle(ctx context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recs = append(r.recs, recorded{ctx: ctx, rec: rec.Clone()})
+	return nil
+}
+
+func (r *recorder) all() []recorded {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]recorded(nil), r.recs...)
+}
+
+func attrsOf(rec slog.Record) map[string]slog.Value {
+	m := map[string]slog.Value{}
+	rec.Attrs(func(a slog.Attr) bool { m[a.Key] = a.Value; return true })
+	return m
+}
+
+type markerKey struct{}
+
+func TestLoggerLogsHandledMessage(t *testing.T) {
+	var r recorder
+	h := Logger(slog.New(&r))(func(context.Context, *RawMsg) error { return nil })
+	ctx := context.WithValue(context.Background(), markerKey{}, "x")
+	if err := h(ctx, &RawMsg{Subject: "orders.1"}); err != nil {
+		t.Fatal(err)
+	}
+	recs := r.all()
+	if len(recs) != 1 {
+		t.Fatalf("%d records, want 1", len(recs))
+	}
+	got, attrs := recs[0], attrsOf(recs[0].rec)
+	if got.rec.Level != slog.LevelDebug || got.rec.Message != "nats: handled" {
+		t.Fatalf("record = %v %q, want DEBUG nats: handled", got.rec.Level, got.rec.Message)
+	}
+	if attrs["subject"].String() != "orders.1" || attrs["duration"].Kind() != slog.KindDuration {
+		t.Fatalf("attrs = %v, want subject and duration", attrs)
+	}
+	if _, ok := attrs["error"]; ok {
+		t.Fatal("a handled message must not carry an error attribute")
+	}
+	if got.ctx.Value(markerKey{}) != "x" {
+		t.Fatal("the record must be logged with the handler's context")
+	}
+}
+
+func TestLoggerLogsFailureAtDebug(t *testing.T) {
+	var r recorder
+	boom := errors.New("boom")
+	h := Logger(slog.New(&r))(func(context.Context, *RawMsg) error { return boom })
+	if err := h(context.Background(), &RawMsg{Subject: "orders.1"}); err != boom {
+		t.Fatalf("returned %v, want the handler error", err)
+	}
+	recs := r.all()
+	if len(recs) != 1 {
+		t.Fatalf("%d records, want 1 (the App logs the failure at Error itself)", len(recs))
+	}
+	got, attrs := recs[0], attrsOf(recs[0].rec)
+	if got.rec.Level != slog.LevelDebug || got.rec.Message != "nats: handled" {
+		t.Fatalf("record = %v %q, want DEBUG nats: handled", got.rec.Level, got.rec.Message)
+	}
+	if e, ok := attrs["error"].Any().(error); !ok || e != boom {
+		t.Fatalf("error attribute = %v, want the handler error", attrs["error"])
+	}
+	if attrs["duration"].Kind() != slog.KindDuration {
+		t.Fatal("a failure must carry the duration too")
 	}
 }

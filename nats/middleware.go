@@ -36,18 +36,22 @@ func Recover() Middleware {
 	}
 }
 
-// Logger logs each handled message at Debug and each failure at Error, except
-// a duplicate (ErrDuplicate), which is logged at Debug.
+// Logger is an access log: one Debug line per message, "nats: handled", with
+// the subject, the duration and, when the handler failed, the error. It logs
+// through the handler's context, so a slog.Handler can add a trace ID. The App
+// already logs every failure at Error, so Logger does not. A skipped duplicate
+// (ErrDuplicate) gets "nats: duplicate skipped" instead.
 func Logger(l *slog.Logger) Middleware {
 	return func(next Handler) Handler {
 		return func(ctx context.Context, m *RawMsg) error {
 			begin := time.Now()
 			err := next(ctx, m)
-			if errors.Is(err, ErrDuplicate) {
+			switch {
+			case errors.Is(err, ErrDuplicate):
 				l.DebugContext(ctx, "nats: duplicate skipped", "subject", m.Subject)
-			} else if err != nil {
-				l.ErrorContext(ctx, "nats: handler failed", "subject", m.Subject, "error", err)
-			} else {
+			case err != nil:
+				l.DebugContext(ctx, "nats: handled", "subject", m.Subject, "duration", time.Since(begin), "error", err)
+			default:
 				l.DebugContext(ctx, "nats: handled", "subject", m.Subject, "duration", time.Since(begin))
 			}
 			return err
