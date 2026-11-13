@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest minor release receives security fixes. Before v1.0.0 that is the latest v0.x.
+Only the latest minor release of the latest major version receives security fixes.
 
 ## Reporting a vulnerability
 

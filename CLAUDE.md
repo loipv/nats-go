@@ -80,5 +80,5 @@ When the server normalises a field, extend this comparison instead of special-ca
 - Tests map 1:1 to source files (`foo.go` ↔ `foo_test.go`). The only extras are `helpers_test.go` (`runServer`, `runServerWith`, `testCerts`, `newApp`, `start`, `waitFor`, `recv`, `expectNone`) and `example_test.go`. Test unexported code from inside the package; in the subpackages, test through the public API.
 - A new behaviour gets a test that fails without the change.
 - Wrap comments at about 100 columns. Docs, README and godoc are in English.
-- Pre-1.0: API changes are allowed, but list user-visible changes for the release notes.
-- Commits follow Conventional Commits. release-please derives the version, the tag and `CHANGELOG.md` from them (`feat!` or a `BREAKING CHANGE` footer bumps the minor version before 1.0), so `CHANGELOG.md` is never edited by hand.
+- The API is stable from v1.0.0: prefer additions. A breaking change needs a new major version, which for a Go module also means a `/v2` module path; agree on it before writing one. List user-visible changes for the release notes.
+- Commits follow Conventional Commits. release-please derives the version, the tag and `CHANGELOG.md` from them (`feat` bumps the minor version, `fix` the patch, `feat!` or a `BREAKING CHANGE` footer the major), so `CHANGELOG.md` is never edited by hand.

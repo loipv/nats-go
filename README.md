@@ -521,7 +521,7 @@ CI runs the linter, the tests with the race detector on Go 1.26 and the latest s
 
 ## Status
 
-All features above are available. The API may change until v1.0.0.
+All features above are available. The API is stable from v1.0.0 and follows semantic versioning.
 
 ## License
 
