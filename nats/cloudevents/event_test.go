@@ -65,3 +65,37 @@ func TestFromHeaderStandardAttributes(t *testing.T) {
 		t.Fatalf("time = %v, want the zero time without ce-time", e.Time)
 	}
 }
+
+// FuzzFromHeader checks that FromHeader never panics, and that an event it
+// accepts carries spec version 1.0 and the required attributes it was given.
+func FuzzFromHeader(f *testing.F) {
+	f.Add("1.0", "1", "src", "order.created", "2026-10-15T08:30:00Z", "region", "eu")
+	f.Add("1.0", "", "src", "t", "", "", "")
+	f.Add("0.3", "1", "src", "t", "yesterday", "id", "x")
+	f.Add("", "1", "", "", "2026-10-15T08:30:00.5+07:00", "subject", "s")
+	f.Fuzz(func(t *testing.T, specVersion, id, source, typ, tm, extName, extValue string) {
+		h := nats.Header{"ce-specversion": {specVersion}, "ce-id": {id}, "ce-source": {source}, "ce-type": {typ}}
+		if tm != "" {
+			h["ce-time"] = []string{tm}
+		}
+		if extName != "" {
+			h["ce-"+extName] = []string{extValue}
+		}
+		e, err := cloudevents.FromHeader(h)
+		if err != nil {
+			return
+		}
+		// An extension named like a standard attribute replaced it in the map
+		// above, so compare with what the header finally holds.
+		at := func(k string) string { return h[k][0] }
+		if at("ce-specversion") != "1.0" {
+			t.Fatalf("accepted ce-specversion %q", at("ce-specversion"))
+		}
+		if e.ID == "" || e.Source == "" || e.Type == "" {
+			t.Fatalf("accepted an event without id, source or type: %+v", e)
+		}
+		if e.ID != at("ce-id") || e.Source != at("ce-source") || e.Type != at("ce-type") {
+			t.Fatalf("attributes differ from the header: %+v from %v", e, h)
+		}
+	})
+}

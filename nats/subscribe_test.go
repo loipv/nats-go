@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/micro"
 )
@@ -190,5 +191,26 @@ func TestReplyRespondFailureEmits(t *testing.T) {
 		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
 			return e.Handler == "big" && e.Subject == "big" && strings.HasPrefix(e.Err.Error(), "respond: ") && errors.Is(e.Err, natsio.ErrMaxPayload)
 		})
+	})
+}
+
+// FuzzSubjectMatches checks subjectMatches against the server's own matching
+// for every valid pattern and literal subject.
+func FuzzSubjectMatches(f *testing.F) {
+	for _, c := range [][2]string{
+		{"a.b", "a.b"}, {"a.b", "a.c"}, {"a.b", "a.b.c"}, {"a.b.c", "a.b"}, {"a.*", "a.b"},
+		{"a.*", "a.b.c"}, {"*.b", "a.b"}, {"a.>", "a.b"}, {"a.>", "a.b.c"}, {"a.>", "a"},
+		{">", "a"}, {"*", "a.b"}, {"a.*.c", "a.b.c"}, {"a.*.c", "a.b.d"}, {"dlq.>", "dlq.orders"},
+		{"orders", "dlq.orders"}, {"a.*.>", "a.b.c.d"}, {"*.*", "a.b"}, {"a.b*", "a.bc"}, {"a.>x", "a.>x"},
+	} {
+		f.Add(c[0], c[1])
+	}
+	f.Fuzz(func(t *testing.T, pattern, subject string) {
+		if !server.IsValidSubject(pattern) || !server.IsValidLiteralSubject(subject) {
+			t.Skip()
+		}
+		if got, want := subjectMatches(pattern, subject), server.SubjectsCollide(pattern, subject); got != want {
+			t.Fatalf("subjectMatches(%q, %q) = %v, the server says %v", pattern, subject, got, want)
+		}
 	})
 }

@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nats.go/micro"
 )
@@ -194,4 +196,23 @@ func TestIdempotencyConfigValid(t *testing.T) {
 	if len(a.idemNoStore) != 2 {
 		t.Fatalf("idemNoStore = %q, want only the two handlers registered before Start", a.idemNoStore)
 	}
+}
+
+// FuzzValidPublishSubject checks that validPublishSubject never accepts a
+// subject the server would refuse to publish to, or one with white space.
+func FuzzValidPublishSubject(f *testing.F) {
+	for _, s := range []string{"a.b", "", "a..b", "a.*", "a.>", "a b", "a.\t", ".a", "a.", "a.b*", "\u00a0", "a.\u2003b"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if !validPublishSubject(s) {
+			t.Skip()
+		}
+		if !server.IsValidPublishSubject(s) {
+			t.Fatalf("validPublishSubject(%q) = true, but the server rejects it", s)
+		}
+		if strings.ContainsFunc(s, unicode.IsSpace) {
+			t.Fatalf("validPublishSubject(%q) = true, but it contains white space", s)
+		}
+	})
 }
