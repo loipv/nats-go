@@ -1,8 +1,8 @@
-// Command service is a long-running service: it serves requests until
+// Command lifecycle is a long-running service: it serves requests until
 // SIGINT/SIGTERM, exposes a health endpoint and shuts down gracefully.
 //
 //	nats-server -js &
-//	go run ./examples/service
+//	go run ./examples/lifecycle
 //	nats request api.orders.get '{"id":"42"}'   # with the nats CLI
 //	curl localhost:8080/healthz
 //

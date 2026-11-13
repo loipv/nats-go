@@ -78,14 +78,14 @@ func WithExpectLastSubjectSeq(seq uint64) PubOption {
 	return jsOption("WithExpectLastSubjectSeq", jetstream.ExpectedLastSubjSeqHeader, strconv.FormatUint(seq, 10))
 }
 
-// WithJSPublishOpts passes jetstream publish options straight to nats.go, for
+// WithJSPublishOptions passes jetstream publish options straight to nats.go, for
 // anything this package does not wrap (such as jetstream.WithMsgTTL or
 // jetstream.WithExpectLastMsgID). PublishJS only: they are not headers, so
 // Message, PublishJSBatch and atomic batches reject them too.
-func WithJSPublishOpts(opts ...jetstream.PublishOpt) PubOption {
+func WithJSPublishOptions(opts ...jetstream.PublishOpt) PubOption {
 	return func(c *pubConfig) {
 		c.jsPubOpts = append(c.jsPubOpts, opts...)
-		c.jsOnly = append(c.jsOnly, "WithJSPublishOpts")
+		c.jsOnly = append(c.jsOnly, "WithJSPublishOptions")
 	}
 }
 
@@ -115,12 +115,12 @@ func (a *App) build(subject string, v any, opts []PubOption) (*RawMsg, pubConfig
 // (WithMsgID, WithExpectStream, WithExpectLastSeq, WithExpectLastSubjectSeq)
 // as headers. Publish rejects those JetStream options, so a message built with
 // them is only for PublishJS or a batch. It needs no connection and is meant
-// for integrations such as atomic batches. WithJSPublishOpts is rejected: its
+// for integrations such as atomic batches. WithJSPublishOptions is rejected: its
 // options cannot travel with the message.
 func (a *App) Message(subject string, v any, opts ...PubOption) (*RawMsg, error) {
 	m, c, err := a.build(subject, v, opts)
 	if err == nil && len(c.jsPubOpts) > 0 {
-		return nil, fmt.Errorf("nats: option WithJSPublishOpts requires PublishJS")
+		return nil, fmt.Errorf("nats: option WithJSPublishOptions requires PublishJS")
 	}
 	return m, err
 }

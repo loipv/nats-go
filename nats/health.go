@@ -8,8 +8,8 @@ import (
 	natsio "github.com/nats-io/nats.go"
 )
 
-// Report is the health of an App.
-type Report struct {
+// HealthReport is the health of an App.
+type HealthReport struct {
 	// Status is "ok", "degraded" (reconnecting, or a handler restarting or
 	// stopped) or "down" (not started, shut down or connection closed).
 	Status string `json:"status"`
@@ -21,7 +21,7 @@ type Report struct {
 
 // Health reports the connection and handler state. It does not block while
 // Start is connecting: it answers at once, with Ready false.
-func (a *App) Health() Report {
+func (a *App) Health() HealthReport {
 	a.mu.Lock()
 	var nc *natsio.Conn
 	if c := a.liveLocked(); c != nil {
@@ -30,7 +30,7 @@ func (a *App) Health() Report {
 	runners := slices.Clone(a.runners)
 	a.mu.Unlock()
 
-	r := Report{Connection: natsio.DISCONNECTED.String(), Ready: a.running(), Handlers: []HandlerStatus{}}
+	r := HealthReport{Connection: natsio.DISCONNECTED.String(), Ready: a.running(), Handlers: []HandlerStatus{}}
 	if nc != nil {
 		r.Connection = nc.Status().String()
 	}

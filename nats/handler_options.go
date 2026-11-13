@@ -238,3 +238,14 @@ func WithBatchSize(n int) HandlerOption {
 func WithBatchWait(d time.Duration) HandlerOption {
 	return func(c *handlerConfig) { c.batchWait = d; c.used = append(c.used, "WithBatchWait") }
 }
+
+// WithEndpointSubject sets the subject of an endpoint, relative to its group.
+// Defaults to the endpoint name.
+func WithEndpointSubject(subject string) HandlerOption {
+	return func(c *handlerConfig) { c.endpointSubject = subject; c.used = append(c.used, "WithEndpointSubject") }
+}
+
+// WithEndpointMetadata sets the metadata an endpoint reports in the service INFO.
+func WithEndpointMetadata(md map[string]string) HandlerOption {
+	return func(c *handlerConfig) { c.endpointMetadata = md; c.used = append(c.used, "WithEndpointMetadata") }
+}

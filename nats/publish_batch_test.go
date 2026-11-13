@@ -18,9 +18,9 @@ func TestPublishJSBatchAcksInOrder(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	start(t, a)
-	var msgs []BatchMsg
+	var msgs []PublishBatchMsg
 	for i := range 5 {
-		msgs = append(msgs, BatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
+		msgs = append(msgs, PublishBatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
 	}
 	acks, err := a.PublishJSBatch(context.Background(), msgs)
 	if err != nil || len(acks) != 5 {
@@ -38,7 +38,7 @@ func TestPublishJSBatchPartialFailure(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	start(t, a)
-	acks, err := a.PublishJSBatch(context.Background(), []BatchMsg{
+	acks, err := a.PublishJSBatch(context.Background(), []PublishBatchMsg{
 		{Subject: "orders.x", Data: order{ID: "a"}},
 		{Subject: "orders.x", Data: order{ID: "b"}, Opts: []PubOption{WithExpectLastSeq(99)}},
 		{Subject: "orders.x", Data: order{ID: "c"}},
@@ -60,7 +60,7 @@ func TestPublishJSBatchEncodeErrorSendsNothing(t *testing.T) {
 	a := newApp(t, s)
 	setupStream(t, a)
 	start(t, a)
-	_, err := a.PublishJSBatch(context.Background(), []BatchMsg{{Subject: "orders.x", Data: order{ID: "a"}}, {Subject: "orders.x", Data: make(chan int)}})
+	_, err := a.PublishJSBatch(context.Background(), []PublishBatchMsg{{Subject: "orders.x", Data: order{ID: "a"}}, {Subject: "orders.x", Data: make(chan int)}})
 	if err == nil {
 		t.Fatal("want encode error")
 	}
@@ -80,7 +80,7 @@ func TestPublishJSBatchMiddlewarePerMessage(t *testing.T) {
 		return func(ctx context.Context, m *RawMsg) error { n.Add(1); return next(ctx, m) }
 	})
 	start(t, a)
-	_, _ = a.PublishJSBatch(context.Background(), []BatchMsg{{Subject: "orders.x", Data: 1}, {Subject: "orders.x", Data: 2}})
+	_, _ = a.PublishJSBatch(context.Background(), []PublishBatchMsg{{Subject: "orders.x", Data: 1}, {Subject: "orders.x", Data: 2}})
 	if n.Load() != 2 {
 		t.Fatal(n.Load())
 	}
@@ -96,7 +96,7 @@ func TestPublishJSBatchContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
-	_, err := a.PublishJSBatch(ctx, []BatchMsg{{Subject: "nostream.x", Data: 1}, {Subject: "nostream.y", Data: 2}})
+	_, err := a.PublishJSBatch(ctx, []PublishBatchMsg{{Subject: "nostream.x", Data: 1}, {Subject: "nostream.y", Data: 2}})
 	var be *PublishBatchError
 	if !errors.As(err, &be) || len(be.Failed) != 2 || time.Since(begin) > time.Second {
 		t.Fatal(err, time.Since(begin))
@@ -110,7 +110,7 @@ func TestPublishJSBatchContextDeadline(t *testing.T) {
 
 func TestPublishJSBatchNotRunning(t *testing.T) {
 	a, _ := New()
-	if _, err := a.PublishJSBatch(context.Background(), []BatchMsg{{Subject: "x", Data: 1}}); !errors.Is(err, ErrNotRunning) {
+	if _, err := a.PublishJSBatch(context.Background(), []PublishBatchMsg{{Subject: "x", Data: 1}}); !errors.Is(err, ErrNotRunning) {
 		t.Fatal(err)
 	}
 }
@@ -134,9 +134,9 @@ func TestPublishJSBatchReadyAcksBeatExpiredContext(t *testing.T) {
 		}
 	})
 	start(t, a)
-	var msgs []BatchMsg
+	var msgs []PublishBatchMsg
 	for i := range 4 {
-		msgs = append(msgs, BatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
+		msgs = append(msgs, PublishBatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
 	}
 	acks, err := a.PublishJSBatch(ctx, msgs)
 	if err != nil {
@@ -157,9 +157,9 @@ func TestPublishJSBatchCancelledContextSendsNothing(t *testing.T) {
 	start(t, a)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	var msgs []BatchMsg
+	var msgs []PublishBatchMsg
 	for i := range 5 {
-		msgs = append(msgs, BatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
+		msgs = append(msgs, PublishBatchMsg{Subject: "orders.x", Data: order{ID: fmt.Sprint(i)}})
 	}
 	_, err := a.PublishJSBatch(ctx, msgs)
 	var be *PublishBatchError
@@ -184,9 +184,9 @@ func TestPublishJSBatchDeadlineStopsSending(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = sink.Unsubscribe() }()
-	msgs := make([]BatchMsg, 4010)
+	msgs := make([]PublishBatchMsg, 4010)
 	for i := range msgs {
-		msgs[i] = BatchMsg{Subject: "sink.x", Data: i}
+		msgs[i] = PublishBatchMsg{Subject: "sink.x", Data: i}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -211,9 +211,9 @@ func TestPublishJSBatchUnansweredFuturesTimeOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = sink.Unsubscribe() }()
-	msgs := make([]BatchMsg, 4000)
+	msgs := make([]PublishBatchMsg, 4000)
 	for i := range msgs {
-		msgs[i] = BatchMsg{Subject: "sink.x", Data: i}
+		msgs[i] = PublishBatchMsg{Subject: "sink.x", Data: i}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -227,7 +227,7 @@ func TestPublishJSBatchUnansweredFuturesTimeOut(t *testing.T) {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := a.PublishJSBatch(ctx, []BatchMsg{{Subject: "orders.x", Data: 1}}); err != nil {
+	if _, err := a.PublishJSBatch(ctx, []PublishBatchMsg{{Subject: "orders.x", Data: 1}}); err != nil {
 		if errors.As(err, &be) {
 			t.Fatal(be.Failed)
 		}
@@ -288,7 +288,7 @@ func TestPublishBatchErrorMessage(t *testing.T) {
 
 func TestPublishJSAtomicBatch(t *testing.T) {
 	a := startAtomic(t, "ATOMIC", "atomic.>", true)
-	msgs := []BatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "atomic.b", Data: 2}, {Subject: "atomic.c", Data: 3}}
+	msgs := []PublishBatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "atomic.b", Data: 2}, {Subject: "atomic.c", Data: 3}}
 	ack, err := a.PublishJSAtomicBatch(context.Background(), msgs)
 	if err != nil || ack.BatchSize != 3 {
 		t.Fatal(ack, err)
@@ -300,7 +300,7 @@ func TestPublishJSAtomicBatch(t *testing.T) {
 
 func TestPublishJSAtomicBatchRejectedWithoutAllow(t *testing.T) {
 	a := startAtomic(t, "PLAIN", "plain.>", false)
-	if _, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "plain.a", Data: 1}, {Subject: "plain.b", Data: 2}}); err == nil {
+	if _, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "plain.a", Data: 1}, {Subject: "plain.b", Data: 2}}); err == nil {
 		t.Fatal("want error")
 	}
 	if streamMsgs(t, a, "PLAIN") != 0 {
@@ -310,7 +310,7 @@ func TestPublishJSAtomicBatchRejectedWithoutAllow(t *testing.T) {
 
 func TestPublishJSAtomicBatchSubjectOutsideStream(t *testing.T) {
 	a := startAtomic(t, "ATOMIC", "atomic.>", true)
-	if _, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "elsewhere.b", Data: 2}}); err == nil {
+	if _, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "elsewhere.b", Data: 2}}); err == nil {
 		t.Fatal("want error")
 	}
 	if streamMsgs(t, a, "ATOMIC") != 0 {
@@ -330,7 +330,7 @@ func TestPublishJSAtomicBatchAppliesMiddleware(t *testing.T) {
 		}
 	})
 	start(t, a)
-	if _, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "atomic.b", Data: 2}}); err != nil {
+	if _, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "atomic.a", Data: 1}, {Subject: "atomic.b", Data: 2}}); err != nil {
 		t.Fatal(err)
 	}
 	for seq := uint64(1); seq <= 2; seq++ {
@@ -342,7 +342,7 @@ func TestPublishJSAtomicBatchAppliesMiddleware(t *testing.T) {
 
 func TestPublishJSAtomicBatchEmptyAndNotRunning(t *testing.T) {
 	a, _ := New()
-	if _, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "x", Data: 1}}); !errors.Is(err, ErrNotRunning) {
+	if _, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "x", Data: 1}}); !errors.Is(err, ErrNotRunning) {
 		t.Fatal(err)
 	}
 	b := newApp(t, runServer(t))
@@ -358,14 +358,14 @@ func TestPublishJSAtomicBatchAfterFailedStart(t *testing.T) {
 	if err := a.Start(context.Background()); err == nil {
 		t.Fatal("want start error")
 	}
-	if _, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "atomic.x", Data: 1}}); !errors.Is(err, ErrNotRunning) {
+	if _, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "atomic.x", Data: 1}}); !errors.Is(err, ErrNotRunning) {
 		t.Fatal(err)
 	}
 }
 
 func TestPublishJSAtomicBatchSingleMessageNoHeaders(t *testing.T) {
 	a := startAtomic(t, "ATOMIC", "atomic.>", true)
-	ack, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "atomic.a", Data: 1}})
+	ack, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "atomic.a", Data: 1}})
 	if err != nil || ack.BatchSize != 1 {
 		t.Fatal(ack, err)
 	}
@@ -380,7 +380,7 @@ func TestPublishJSAtomicBatchNextTwice(t *testing.T) {
 		}
 	})
 	start(t, a)
-	_, err := a.PublishJSAtomicBatch(context.Background(), []BatchMsg{{Subject: "orders.x", Data: 1}})
+	_, err := a.PublishJSAtomicBatch(context.Background(), []PublishBatchMsg{{Subject: "orders.x", Data: 1}})
 	if err == nil || !strings.Contains(err.Error(), "called next twice") {
 		t.Fatalf("err = %v, want a next-called-twice error", err)
 	}

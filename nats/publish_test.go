@@ -329,11 +329,11 @@ func TestPublishJSWithJSPublishOpts(t *testing.T) {
 	if _, err := a.PublishJS(ctx, "orders.x", order{ID: "1"}, WithMsgID("m-1")); err != nil {
 		t.Fatal(err)
 	}
-	_, err := a.PublishJS(ctx, "orders.x", order{ID: "2"}, WithJSPublishOpts(jetstream.WithExpectLastMsgID("other")))
+	_, err := a.PublishJS(ctx, "orders.x", order{ID: "2"}, WithJSPublishOptions(jetstream.WithExpectLastMsgID("other")))
 	if err == nil {
 		t.Fatal("expected wrong last msg id to fail")
 	}
-	if _, err := a.PublishJS(ctx, "orders.x", order{ID: "2"}, WithJSPublishOpts(jetstream.WithExpectLastMsgID("m-1"))); err != nil {
+	if _, err := a.PublishJS(ctx, "orders.x", order{ID: "2"}, WithJSPublishOptions(jetstream.WithExpectLastMsgID("m-1"))); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -343,14 +343,14 @@ func TestJSPublishOptsRejectedOutsidePublishJS(t *testing.T) {
 	a := newApp(t, s)
 	start(t, a)
 	ctx := context.Background()
-	opt := WithJSPublishOpts(jetstream.WithMsgID("x"))
+	opt := WithJSPublishOptions(jetstream.WithMsgID("x"))
 	_, msgErr := a.Message("x", 1, opt)
 	_, reqErr := a.Request(ctx, "x", 1, nil, opt)
-	_, batchErr := a.PublishJSBatch(ctx, []BatchMsg{{Subject: "x", Data: 1, Opts: []PubOption{opt}}})
+	_, batchErr := a.PublishJSBatch(ctx, []PublishBatchMsg{{Subject: "x", Data: 1, Opts: []PubOption{opt}}})
 	for name, err := range map[string]error{
 		"Publish": a.Publish(ctx, "x", 1, opt), "Request": reqErr, "Message": msgErr, "PublishJSBatch": batchErr,
 	} {
-		if err == nil || !strings.Contains(err.Error(), "WithJSPublishOpts") {
+		if err == nil || !strings.Contains(err.Error(), "WithJSPublishOptions") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

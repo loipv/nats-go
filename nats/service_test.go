@@ -321,12 +321,12 @@ func TestEndpointNilHandler(t *testing.T) {
 func TestEndpointRegisteredTwice(t *testing.T) {
 	s := runServer(t)
 	h := TypedReply(func(_ context.Context, m *Msg[int]) (int, error) { return m.Data, nil })
-	cases := map[string]func(svc *ServiceRef){
-		"same name, other subject": func(svc *ServiceRef) {
+	cases := map[string]func(svc *Service){
+		"same name, other subject": func(svc *Service) {
 			svc.Endpoint("get", h)
 			svc.Endpoint("get", h, WithEndpointSubject("other"))
 		},
-		"dotted and nested groups": func(svc *ServiceRef) {
+		"dotted and nested groups": func(svc *Service) {
 			svc.Group("a.b").Endpoint("get", h)
 			svc.Group("a").Group("b").Endpoint("get", h)
 		},

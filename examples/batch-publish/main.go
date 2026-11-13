@@ -51,9 +51,9 @@ func main() {
 	fmt.Println("messages in the stream at the start:", count(ctx, stream))
 
 	// Not atomic: every message has its own ack, or an entry in Failed.
-	msgs := make([]nats.BatchMsg, 5)
+	msgs := make([]nats.PublishBatchMsg, 5)
 	for i := range msgs {
-		msgs[i] = nats.BatchMsg{Subject: "batchdemo.plain", Data: Item{N: i}}
+		msgs[i] = nats.PublishBatchMsg{Subject: "batchdemo.plain", Data: Item{N: i}}
 	}
 	acks, err := app.PublishJSBatch(ctx, msgs)
 	if err != nil {
@@ -65,9 +65,9 @@ func main() {
 	fmt.Println("messages in the stream after PublishJSBatch:", count(ctx, stream))
 
 	// Atomic: all three or none.
-	ok := make([]nats.BatchMsg, 3)
+	ok := make([]nats.PublishBatchMsg, 3)
 	for i := range ok {
-		ok[i] = nats.BatchMsg{Subject: "batchdemo.atomic", Data: Item{N: i}}
+		ok[i] = nats.PublishBatchMsg{Subject: "batchdemo.atomic", Data: Item{N: i}}
 	}
 	ack, err := app.PublishJSAtomicBatch(ctx, ok)
 	if err != nil {
@@ -77,7 +77,7 @@ func main() {
 	fmt.Println("messages in the stream after the atomic batch:", count(ctx, stream))
 
 	// One subject belongs to no stream, so the server rejects the whole batch.
-	bad := []nats.BatchMsg{
+	bad := []nats.PublishBatchMsg{
 		{Subject: "batchdemo.atomic", Data: Item{N: 100}},
 		{Subject: "elsewhere.atomic", Data: Item{N: 101}},
 		{Subject: "batchdemo.atomic", Data: Item{N: 102}},

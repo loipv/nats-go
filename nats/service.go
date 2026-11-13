@@ -11,17 +11,17 @@ import (
 	"github.com/nats-io/nats.go/micro"
 )
 
-// ServiceRef is a NATS micro service registered with Service. Add endpoints
+// Service is a NATS micro service registered with App.Service. Add endpoints
 // with Endpoint and groups with Group.
-type ServiceRef struct {
+type Service struct {
 	app *App
 	reg *serviceReg
 }
 
-// GroupRef is a group of endpoints sharing a subject prefix, created with
-// ServiceRef.Group or GroupRef.Group.
-type GroupRef struct {
-	svc    *ServiceRef
+// Group is a group of endpoints sharing a subject prefix, created with
+// Service.Group or Group.Group.
+type Group struct {
+	svc    *Service
 	groups []groupSpec
 }
 
@@ -34,8 +34,8 @@ type groupSpec struct {
 // PING, INFO and STATS subjects once the app starts. cfg is passed to
 // micro.AddService as is; Name and Version are required, and Name must be
 // unique within the app.
-func (a *App) Service(cfg micro.Config) *ServiceRef {
-	s := &ServiceRef{app: a, reg: &serviceReg{cfg: cfg}}
+func (a *App) Service(cfg micro.Config) *Service {
+	s := &Service{app: a, reg: &serviceReg{cfg: cfg}}
 	switch {
 	case cfg.Name == "":
 		a.addErr(errors.New("nats: service: empty name"))
@@ -60,16 +60,16 @@ func (a *App) Service(cfg micro.Config) *ServiceRef {
 }
 
 // Group returns a group whose endpoints' subjects are prefixed with prefix.
-func (s *ServiceRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
-	return (&GroupRef{svc: s}).Group(prefix, opts...)
+func (s *Service) Group(prefix string, opts ...micro.GroupOpt) *Group {
+	return (&Group{svc: s}).Group(prefix, opts...)
 }
 
 // Group returns a nested group whose prefix is appended to g's.
-func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
+func (g *Group) Group(prefix string, opts ...micro.GroupOpt) *Group {
 	if prefix == "" {
 		g.svc.app.addErr(fmt.Errorf("nats: service %q: empty group prefix", g.svc.reg.cfg.Name))
 	}
-	return &GroupRef{svc: g.svc, groups: append(append([]groupSpec(nil), g.groups...), groupSpec{prefix, opts})}
+	return &Group{svc: g.svc, groups: append(append([]groupSpec(nil), g.groups...), groupSpec{prefix, opts})}
 }
 
 // Endpoint registers h as a micro endpoint of the service. The subject is the
@@ -89,17 +89,17 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 // Options allowed: WithTimeout, WithMiddleware, WithMaxAttempts, WithBackoff, WithDLQ,
 // WithIdempotency, WithIdempotencyScope, WithEndpointSubject and
 // WithEndpointMetadata. WithMaxAttempts defaults to 1.
-func (s *ServiceRef) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
+func (s *Service) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
 	s.addEndpoint(nil, name, h, opts)
 }
 
 // Endpoint registers h as a micro endpoint of the group, with the same rules
-// as ServiceRef.Endpoint.
-func (g *GroupRef) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
+// as Service.Endpoint.
+func (g *Group) Endpoint(name string, h ReplyHandler, opts ...HandlerOption) {
 	g.svc.addEndpoint(g.groups, name, h, opts)
 }
 
-func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler, opts []HandlerOption) {
+func (s *Service) addEndpoint(groups []groupSpec, name string, h ReplyHandler, opts []HandlerOption) {
 	cfg, err := newHandlerConfig(kindEndpoint, opts)
 	if err == nil && name == "" {
 		err = errors.New("nats: endpoint: empty name")
@@ -133,17 +133,6 @@ func (s *ServiceRef) addEndpoint(groups []groupSpec, name string, h ReplyHandler
 		}
 	}
 	s.reg.endpoints = append(s.reg.endpoints, e)
-}
-
-// WithEndpointSubject sets the subject of an endpoint, relative to its group.
-// Defaults to the endpoint name.
-func WithEndpointSubject(subject string) HandlerOption {
-	return func(c *handlerConfig) { c.endpointSubject = subject; c.used = append(c.used, "WithEndpointSubject") }
-}
-
-// WithEndpointMetadata sets the metadata an endpoint reports in the service INFO.
-func WithEndpointMetadata(md map[string]string) HandlerOption {
-	return func(c *handlerConfig) { c.endpointMetadata = md; c.used = append(c.used, "WithEndpointMetadata") }
 }
 
 type serviceReg struct {

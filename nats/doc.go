@@ -230,7 +230,7 @@
 // decodes it into out (a failed responder comes back as *ServiceError) and
 // App.PublishJS waits for the stream's ack, with WithMsgID for deduplication
 // (on Publish and Request, WithMsgID only sets the header).
-// WithJSPublishOpts passes any other jetstream.PublishOpt (such as
+// WithJSPublishOptions passes any other jetstream.PublishOpt (such as
 // jetstream.WithMsgTTL) to PublishJS.
 //
 //	var inv Invoice

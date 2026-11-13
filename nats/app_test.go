@@ -244,7 +244,7 @@ func TestHealthDuringStart(t *testing.T) {
 	started := make(chan error, 1)
 	go func() { started <- a.Start(ctx) }()
 	time.Sleep(100 * time.Millisecond)
-	health := make(chan Report, 1)
+	health := make(chan HealthReport, 1)
 	go func() { health <- a.Health() }()
 	select {
 	case r := <-health:

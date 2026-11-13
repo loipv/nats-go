@@ -9,8 +9,8 @@ import (
 	"github.com/synadia-io/orbit.go/jetstreamext"
 )
 
-// BatchMsg is one message of PublishJSBatch.
-type BatchMsg struct {
+// PublishBatchMsg is one message of PublishJSBatch.
+type PublishBatchMsg struct {
 	Subject string
 	Data    any
 	Opts    []PubOption
@@ -48,7 +48,7 @@ func (e *PublishBatchError) Error() string {
 // its ack: a natsotel "send" span does not record the ack result. A middleware
 // that calls next and then returns an error marks that message failed with
 // its error although it was sent.
-func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream.PubAck, error) {
+func (a *App) PublishJSBatch(ctx context.Context, msgs []PublishBatchMsg) ([]*jetstream.PubAck, error) {
 	if !a.pubOpen.Load() {
 		return nil, ErrNotRunning
 	}
@@ -129,8 +129,8 @@ func (a *App) PublishJSBatch(ctx context.Context, msgs []BatchMsg) ([]*jetstream
 	return acks, nil
 }
 
-// BatchAck is the server's ack for PublishJSAtomicBatch.
-type BatchAck struct {
+// AtomicBatchAck is the server's ack for PublishJSAtomicBatch.
+type AtomicBatchAck struct {
 	Stream string
 	// Sequence is the stream sequence of the last message of the batch.
 	Sequence uint64
@@ -153,7 +153,7 @@ type BatchAck struct {
 // when the server has committed or rejected the batch; if ctx expires while
 // the commit is in flight, the outcome is unknown. WithExpectLastSeq only makes
 // sense on the first message: the server checks it once, when the batch starts.
-func (a *App) PublishJSAtomicBatch(ctx context.Context, msgs []BatchMsg) (*BatchAck, error) {
+func (a *App) PublishJSAtomicBatch(ctx context.Context, msgs []PublishBatchMsg) (*AtomicBatchAck, error) {
 	if !a.pubOpen.Load() {
 		return nil, ErrNotRunning
 	}
@@ -194,7 +194,7 @@ func (a *App) PublishJSAtomicBatch(ctx context.Context, msgs []BatchMsg) (*Batch
 	if err != nil {
 		return nil, fmt.Errorf("nats: atomic batch: %w", err)
 	}
-	return &BatchAck{
+	return &AtomicBatchAck{
 		Stream: ack.Stream, Sequence: ack.Sequence, Domain: ack.Domain,
 		Value: ack.Value, BatchID: ack.BatchID, BatchSize: ack.BatchSize,
 	}, nil

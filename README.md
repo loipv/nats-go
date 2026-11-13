@@ -106,7 +106,7 @@ Start a server with `nats-server -js`, then run any example with `go run ./examp
 | [jetstream](examples/jetstream) | Declared stream and consumers, `PublishJS` with `WithMsgID`, automatic and manual ack |
 | [ordered](examples/ordered) | `ConsumeOrdered` with subject filters |
 | [middleware](examples/middleware) | `Use`, `WithMiddleware`, `Recover`, `Logger`, `UsePublish` |
-| [service](examples/service) | `Run` with signals, validation, health endpoint, credentials |
+| [lifecycle](examples/lifecycle) | `Run` with signals, validation, health endpoint, credentials |
 | [retry-dlq](examples/retry-dlq) | `WithMaxAttempts`, `WithBackoff`, `WithDLQ` on a JetStream consumer and a core subscription, `Nats-DLQ-*` headers |
 | [idempotency](examples/idempotency) | `WithIdempotency` with a `KVStore` and a custom key: two consumers of one stream each run once for three deliveries |
 | [batch](examples/batch) | `ConsumeBatch`, `BatchError`, retry and DLQ per message |
@@ -183,14 +183,14 @@ A responder that failed comes back from `Request` as `*nats.ServiceError` with i
 | `WithHeader(h)` | headers of the message |
 | `WithMsgID(id)` | `Nats-Msg-Id`: the stream drops an ID it has seen within its `Duplicates` window; on `Publish` and `Request` it only sets the header, the default key of `WithIdempotency` |
 | `WithExpectStream(name)`, `WithExpectLastSeq(seq)`, `WithExpectLastSubjectSeq(seq)` | optimistic concurrency checks done by the server |
-| `WithJSPublishOpts(opts...)` | any other `jetstream.PublishOpt`, such as `jetstream.WithMsgTTL`; `PublishJS` only |
+| `WithJSPublishOptions(opts...)` | any other `jetstream.PublishOpt`, such as `jetstream.WithMsgTTL`; `PublishJS` only |
 
 The JetStream options other than `WithMsgID` are rejected by `Publish` and `Request`.
 
 ### Batch publishing
 
 ```go
-acks, err := app.PublishJSBatch(ctx, []nats.BatchMsg{
+acks, err := app.PublishJSBatch(ctx, []nats.PublishBatchMsg{
 	{Subject: "orders.created", Data: o1, Opts: []nats.PubOption{nats.WithMsgID("o1")}},
 	{Subject: "orders.created", Data: o2},
 })
@@ -205,7 +205,7 @@ if errors.As(err, &be) {
 For all-or-nothing publishing use `PublishJSAtomicBatch`:
 
 ```go
-ack, err := app.PublishJSAtomicBatch(ctx, []nats.BatchMsg{
+ack, err := app.PublishJSAtomicBatch(ctx, []nats.PublishBatchMsg{
 	{Subject: "orders.created", Data: order},
 	{Subject: "orders.items", Data: items},
 })
@@ -213,7 +213,7 @@ ack, err := app.PublishJSAtomicBatch(ctx, []nats.BatchMsg{
 
 The server stores every message or none. It needs nats-server 2.12+ and a stream with `AllowAtomicPublish: true` that captures all the subjects. Messages go through `PublishMiddleware` before the batch is sent, so a middleware span ends before the actual send. If `ctx` expires during the commit the outcome is unknown. A `WithExpectLastSeq` option only makes sense on the first message of the batch.
 
-Both batch calls reject `nats.WithJSPublishOpts`, which passes any other `jetstream.PublishOpt` (such as `jetstream.WithMsgTTL`) to `PublishJS` only: those options are not headers, so they cannot travel with a built message.
+Both batch calls reject `nats.WithJSPublishOptions`, which passes any other `jetstream.PublishOpt` (such as `jetstream.WithMsgTTL`) to `PublishJS` only: those options are not headers, so they cannot travel with a built message.
 
 ## Middleware and extensions
 
@@ -436,7 +436,7 @@ CloudEvents v1.0 in binary content mode: attributes travel in `ce-*` headers and
 - `Shutdown(ctx)` stops intake, waits for in-flight handlers and drains the connection within the context deadline. Unacked JetStream messages are redelivered by the server. A second `Shutdown` that starts while the first is running waits for it and returns its error; a `Shutdown` during `Start` waits for `Start`, or cancels it when its `ctx` ends first.
 - `Run(ctx)` is `Start`, wait for `ctx` or for the connection to be closed for good, then `Shutdown` bounded by `WithShutdownTimeout` (30s by default). If that `Shutdown` fails, `Run` returns its error; otherwise, when the connection closed for good, `Run` returns an error wrapping nats.go's `ErrConnectionClosed`.
 - The connection reconnects forever by default (`nats.WithNATSOptions(natsio.MaxReconnects(n))` to change it); while reconnecting, health reports `degraded`.
-- `Health()` returns a `Report`: `Status` (`ok`, `degraded` while reconnecting or while a handler is restarting or has stopped, `down` before `Start`, after `Shutdown` or once the connection is closed), the connection state, `Ready`, and one `HandlerStatus` per handler. `HealthHandler()` serves it as JSON with 200 when `ok` and 503 otherwise; mount it on your own HTTP server.
+- `Health()` returns a `HealthReport`: `Status` (`ok`, `degraded` while reconnecting or while a handler is restarting or has stopped, `down` before `Start`, after `Shutdown` or once the connection is closed), the connection state, `Ready`, and one `HandlerStatus` per handler. `HealthHandler()` serves it as JSON with 200 when `ok` and 503 otherwise; mount it on your own HTTP server.
 
 ### Hooks
 

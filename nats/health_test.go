@@ -32,7 +32,7 @@ func TestHealthLifecycle(t *testing.T) {
 	start(t, a)
 	rec := httptest.NewRecorder()
 	a.HealthHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
-	var r Report
+	var r HealthReport
 	_ = json.Unmarshal(rec.Body.Bytes(), &r)
 	if rec.Code != 200 || r.Status != "ok" || len(r.Handlers) != 1 || r.Handlers[0].State != "running" {
 		t.Fatal(rec.Code, r)
