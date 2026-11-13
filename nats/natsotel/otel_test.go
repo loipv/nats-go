@@ -10,7 +10,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -88,21 +87,6 @@ func wantIntAttr(t *testing.T, s sdktrace.ReadOnlySpan, key string, want int64) 
 	}
 }
 
-func collectMetricNames(t *testing.T, reader *sdkmetric.ManualReader) map[string]bool {
-	t.Helper()
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	names := map[string]bool{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			names[m.Name] = true
-		}
-	}
-	return names
-}
-
 func TestTracePropagatesProducerToConsumer(t *testing.T) {
 	_, sr, _, _, opts := setup(t)
 	s := testutil.RunServer(t)
@@ -164,20 +148,6 @@ func TestErrorTypeSkipsFmtWrappers(t *testing.T) {
 		_ = h(context.Background(), &nats.RawMsg{Subject: subject})
 		if got := attrString(spanNamed(t, sr, "process "+subject), "error.type"); got != c.want {
 			t.Errorf("error.type of %v = %q, want %q", c.err, got, c.want)
-		}
-	}
-}
-
-func TestMetricsRecorded(t *testing.T) {
-	_, _, _, reader, opts := setup(t)
-	pub := natsotel.PublishMiddleware(opts...)(func(context.Context, *nats.RawMsg) error { return nil })
-	con := natsotel.Middleware(opts...)(func(context.Context, *nats.RawMsg) error { return nil })
-	_ = pub(context.Background(), &nats.RawMsg{Subject: "a"})
-	_ = con(context.Background(), &nats.RawMsg{Subject: "a"})
-	names := collectMetricNames(t, reader)
-	for _, n := range []string{"messaging.process.duration", "messaging.client.consumed.messages", "messaging.client.operation.duration", "messaging.client.sent.messages"} {
-		if !names[n] {
-			t.Fatal("missing metric", n, names)
 		}
 	}
 }

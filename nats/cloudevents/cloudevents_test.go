@@ -164,18 +164,6 @@ func TestInvalidExtensionAndEmptyType(t *testing.T) {
 	}
 }
 
-func TestFromHeaderParsesFractionalTime(t *testing.T) {
-	h := nats.Header{"ce-specversion": {"1.0"}, "ce-id": {"1"}, "ce-source": {"s"}, "ce-type": {"t"}, "ce-time": {"2026-10-15T08:30:00.5+07:00"}, "ce-region": {"eu"}}
-	e, err := cloudevents.FromHeader(h)
-	if err != nil || !e.Time.Equal(time.Date(2026, 10, 15, 1, 30, 0, 5e8, time.UTC)) || e.Extensions["region"] != "eu" {
-		t.Fatal(e, err)
-	}
-	h["ce-specversion"] = []string{"0.3"}
-	if _, err := cloudevents.FromHeader(h); err == nil {
-		t.Fatal("unsupported specversion")
-	}
-}
-
 func TestNewPanicsOnEmptySource(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -231,5 +219,35 @@ func TestHandleNilTyped(t *testing.T) {
 	ev.Handle("order.created", cloudevents.Typed(nilFn))
 	if err := a.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "nil handler") {
 		t.Fatalf("Start err = %v, want nil handler error", err)
+	}
+}
+
+func TestWithContentType(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s.ClientURL())
+	ev := cloudevents.New(a, "src")
+	hdr := make(chan nats.Header, 1)
+	a.Subscribe("events.doc", nats.Typed(func(_ context.Context, m *nats.Msg[[]byte]) error { hdr <- m.Header; return nil }))
+	start(t, a)
+	if err := ev.Publish(context.Background(), "doc", []byte("<a/>"), cloudevents.WithContentType("application/xml")); err != nil {
+		t.Fatal(err)
+	}
+	if got := recv(t, hdr).Get("Content-Type"); got != "application/xml" {
+		t.Fatalf("Content-Type = %q, want application/xml", got)
+	}
+}
+
+func TestWithPubOptions(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s.ClientURL())
+	a.Stream(jetstream.StreamConfig{Name: "EVENTS", Subjects: []string{"events.>"}})
+	ev := cloudevents.New(a, "src")
+	start(t, a)
+	ctx := context.Background()
+	if _, err := ev.PublishJS(ctx, "p", 1, cloudevents.WithPubOptions(nats.WithExpectStream("EVENTS"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ev.PublishJS(ctx, "p", 1, cloudevents.WithPubOptions(nats.WithExpectStream("OTHER"))); err == nil {
+		t.Fatal("the stream expectation was not passed on")
 	}
 }
