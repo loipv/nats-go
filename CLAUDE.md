@@ -15,8 +15,10 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 ```
 
 CI builds every package and runs the tests of every package that has tests, with the race detector,
-on Go 1.26 and stable. On stable it also runs gofmt, golangci-lint and govulncheck, and fails under
-90% statement coverage of the packages with tests (`nats`, `nats/natsotel`, `nats/cloudevents`).
+on Go 1.26 and stable, and fails under 90% statement coverage of the packages with tests (`nats`,
+`nats/natsotel`, `nats/cloudevents`). gofmt and golangci-lint run on Go 1.26: the linter is pinned,
+and a newer Go can change the export data format it reads, so bump the two together. govulncheck
+runs on stable.
 
 Examples need a real server: `nats-server -js`, then `go run ./examples/<name>` (`NATS_URL` overrides the URL).
 
