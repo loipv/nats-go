@@ -28,7 +28,9 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 // value is encoded and sent back. A returned error is sent back in the
 // Nats-Service-Error and Nats-Service-Error-Code headers, without its text:
 // return a *ServiceError to choose the code and the description. A decode or
-// validation failure is sent as is with code 400. Any other error, a panic or
+// validation failure is sent as is with code 400, and under WithIdempotency a
+// duplicate as "nats: duplicate message" (400) and a key claimed elsewhere as
+// "nats: message in progress elsewhere" (500). Any other error, a panic or
 // a response that cannot be encoded is sent as "internal error" (500), or
 // "bad request" (400) when Terminal; the full error is logged and
 // dead-lettered. A middleware that returns nil without calling next

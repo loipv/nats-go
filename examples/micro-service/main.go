@@ -78,8 +78,8 @@ func main() {
 		q, ok := stock[m.Data.SKU]
 		if !ok {
 			// The caller reads this code and text; other errors arrive as 500
-			// "internal error".
-			return Stock{}, &nats.ServiceError{Code: 404, Description: "unknown sku"}
+			// "internal error". Terminal: retrying cannot help.
+			return Stock{}, nats.Terminal(&nats.ServiceError{Code: 404, Description: "unknown sku"})
 		}
 		return Stock{SKU: m.Data.SKU, Quantity: q}, nil
 	}), nats.WithEndpointMetadata(map[string]string{"owner": "warehouse"}))

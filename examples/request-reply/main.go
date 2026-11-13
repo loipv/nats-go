@@ -24,9 +24,9 @@ func main() {
 
 	app.SubscribeReply("math.double", nats.TypedReply(func(_ context.Context, m *nats.Msg[int]) (int, error) {
 		if m.Data < 0 {
-			// The caller reads this code and text. Any other error would reach
-			// it as 500 "internal error"; its text stays in the server log.
-			return 0, &nats.ServiceError{Code: 422, Description: "negative input"}
+			// The caller reads this code and text; any other error would reach
+			// it as 500 "internal error". Terminal: retrying cannot help.
+			return 0, nats.Terminal(&nats.ServiceError{Code: 422, Description: "negative input"})
 		}
 		return m.Data * 2, nil
 	}))

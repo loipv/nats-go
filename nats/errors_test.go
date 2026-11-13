@@ -52,6 +52,14 @@ func TestReplyError(t *testing.T) {
 		{"terminal error", Terminal(errors.New("pq: relation users")), 400, "bad request"},
 		{"plain error", errors.New("dial tcp 10.0.0.5:5432: refused"), 500, "internal error"},
 		{"panic", &panicError{v: "boom"}, 500, "internal error"},
+		// A *ServiceError received from another service is not forwarded.
+		{"received service error", &ServiceError{Code: 404, Description: "pq: relation invoices", received: true}, 500, "internal error"},
+		{"wrapped received service error", fmt.Errorf("billing: %w", &ServiceError{Code: 404, Description: "x", received: true}), 500, "internal error"},
+		{"terminal received service error", Terminal(&ServiceError{Code: 404, Description: "x", received: true}), 400, "bad request"},
+		// A blank description would reach the requester as an empty header.
+		{"blank description", &ServiceError{Code: 404, Description: " "}, 404, "internal error"},
+		{"description starting with a line break", &ServiceError{Code: 404, Description: "\r\nreason"}, 404, "internal error"},
+		{"padded description", &ServiceError{Code: 404, Description: "  gone\t"}, 404, "gone"},
 	} {
 		code, desc := replyError(c.err)
 		if code != c.code || desc != c.desc {

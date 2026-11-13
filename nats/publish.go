@@ -167,7 +167,9 @@ func (a *App) Publish(ctx context.Context, subject string, v any, opts ...PubOpt
 // *[]byte receives the payload unchanged, and any other out must be a
 // non-nil pointer. The raw reply is returned so its headers can be read,
 // also when decoding fails. The timeout comes from ctx. A reply carrying
-// Nats-Service-Error is returned as *ServiceError.
+// Nats-Service-Error or Nats-Service-Error-Code is returned as *ServiceError;
+// a handler that returns that error does not forward its text (see
+// ServiceError).
 func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...PubOption) (*RawMsg, error) {
 	if out != nil {
 		if rv := reflect.ValueOf(out); rv.Kind() != reflect.Pointer || rv.IsNil() {
@@ -191,9 +193,11 @@ func (a *App) Request(ctx context.Context, subject string, v, out any, opts ...P
 	if reply == nil {
 		return nil, fmt.Errorf("nats: request %q: no reply (a publish middleware did not call next)", subject)
 	}
-	if desc := reply.Header.Get(micro.ErrorHeader); desc != "" {
-		code, _ := strconv.Atoi(reply.Header.Get(micro.ErrorCodeHeader))
-		return nil, &ServiceError{Code: code, Description: desc}
+	// Either header marks an error reply, even when the other one is empty.
+	desc, codeHdr := reply.Header.Get(micro.ErrorHeader), reply.Header.Get(micro.ErrorCodeHeader)
+	if desc != "" || codeHdr != "" {
+		code, _ := strconv.Atoi(codeHdr)
+		return nil, &ServiceError{Code: code, Description: desc, received: true}
 	}
 	switch p := out.(type) {
 	case nil:

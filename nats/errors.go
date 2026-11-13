@@ -3,6 +3,7 @@ package nats
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Sentinel errors returned by the package.
@@ -64,15 +65,25 @@ func IsTerminal(err error) bool {
 // failed. It is carried in the Nats-Service-Error and Nats-Service-Error-Code
 // headers, compatible with the NATS micro protocol.
 //
-// A SubscribeReply or endpoint handler, or Msg.RespondError, returns a
-// *ServiceError to choose what the requester gets: Code (500 when not
+// A SubscribeReply or endpoint handler returns a *ServiceError, or passes one
+// to Msg.RespondError, to choose what the requester gets: Code (500 when not
 // positive, 400 for a Terminal error) and the first line of Description
-// ("internal error" or "bad request" when empty). The text of any other
+// ("internal error" or "bad request" when blank). The text of any other
 // handler error is never sent; see Terminal. A *ServiceError only decides what
 // the requester sees: wrap it with Terminal to also stop the retries.
+//
+// The *ServiceError that App.Request returns came from another service, so a
+// handler that returns it, wrapped or not, sends "internal error" (or "bad
+// request" when Terminal), never that service's text. To pass the failure on,
+// return a new *ServiceError with the code and the text you choose.
 type ServiceError struct {
 	Code        int
 	Description string
+
+	// received is set on the *ServiceError App.Request returns: another
+	// service chose that text, so a handler that returns it, wrapped or not,
+	// does not forward it.
+	received bool
 }
 
 func (e *ServiceError) Error() string {
@@ -104,12 +115,14 @@ func replyError(err error) (code int, description string) {
 	var se *ServiceError
 	var sh *shownError
 	switch {
-	case errors.As(err, &se) && se != nil:
+	case errors.As(err, &se) && se != nil && !se.received:
 		if se.Code > 0 {
 			code = se.Code
 		}
-		if d := firstLine(errors.New(se.Description)); d != "" {
-			description = d
+		// A blank description would go out as an empty header, which a
+		// requester reads as success.
+		if d, _, _ := strings.Cut(se.Description, "\n"); strings.TrimSpace(d) != "" {
+			description = strings.TrimSpace(d)
 		}
 	case errors.As(err, &sh):
 		description = firstLine(sh)

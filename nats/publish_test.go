@@ -11,6 +11,7 @@ import (
 
 	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nats.go/micro"
 )
 
 func TestPublishNotRunning(t *testing.T) {
@@ -414,5 +415,24 @@ func BenchmarkPublishJS(b *testing.B) {
 		if _, err := a.PublishJS(ctx, "orders.x", order{ID: "1"}); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// A responder that sets only the error code still answered with an error.
+func TestRequestErrorCodeWithoutDescription(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	start(t, a)
+	sub, err := a.Conn().Subscribe("raw", func(m *natsio.Msg) {
+		_ = m.RespondMsg(&natsio.Msg{Header: Header{micro.ErrorCodeHeader: {"404"}}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+	_, err = a.Request(requestCtx(t), "raw", 1, nil)
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != 404 {
+		t.Fatalf("got %v, want a *ServiceError with code 404", err)
 	}
 }

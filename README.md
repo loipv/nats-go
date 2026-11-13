@@ -161,9 +161,13 @@ An option used on a handler kind it does not apply to makes `Start` fail.
 | `nats.Terminal(err)` | `Term` (never redelivered) | no | immediately, if `WithDLQ(subject)` is set | 400 `bad request` |
 | decode or validation failure | as `Terminal` | as `Terminal` | as `Terminal` | 400 and the failure |
 | `*nats.ServiceError{Code, Description}` | as the error it is (`Terminal` or not) | as left | as left | its code and description |
+| `nats.ErrDuplicate`, from `WithIdempotency` | `Ack` | no | no | 400 `nats: duplicate message` |
+| `nats.ErrInProgress`, from `WithIdempotency` | `NakWithDelay` | yes | as any other error | 500 `nats: message in progress elsewhere` |
 | panic | handled as any other error | as above | as above | 500 `internal error` |
 
-A requester never receives the text of a handler error, which may name a host, a table or a query. Return a `*nats.ServiceError` to choose the code and the description it gets; wrap it in `nats.Terminal` to also stop the retries. The full error is still logged, dead-lettered (`Nats-DLQ-Error`) and passed to the event callbacks. The Reply column applies to `SubscribeReply`, endpoints and `m.RespondError`.
+A requester never receives the text of a handler error, which may name a host, a table or a query. Return a `*nats.ServiceError` to choose the code and the description it gets; wrap it in `nats.Terminal` to also stop the retries. A `Validate` method can return one too, to answer with, say, 422. The full error is still logged, dead-lettered (`Nats-DLQ-Error`) and passed to the event callbacks. The Reply column applies to `SubscribeReply`, endpoints and `m.RespondError`.
+
+The `*nats.ServiceError` that `app.Request` returns came from another service. A handler that returns it, even wrapped, answers `internal error`, so a downstream service's text never reaches your requester; to pass the failure on, return a new `*nats.ServiceError` with the code and the text you choose.
 
 Every `Term` carries the first line of the error as its reason, reported by the server in the `$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED` advisory. Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `SubscribeReply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
 

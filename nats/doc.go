@@ -107,11 +107,15 @@
 //	Terminal(err)                   Term           400 "bad request"
 //	decode or validation failure    Term           400 and the failure
 //	*ServiceError                   as its error   its Code and Description
+//	ErrDuplicate (WithIdempotency)  Ack            400 "nats: duplicate message"
+//	ErrInProgress (WithIdempotency) NakWithDelay   500 "nats: message in progress elsewhere"
 //
 // A requester never receives the text of a handler error: return a
 // *ServiceError to choose the code and the description (wrap it with Terminal
-// to also stop the retries). The full error is still logged, dead-lettered
-// and reported to the event callbacks.
+// to also stop the retries). A *ServiceError that App.Request returned came
+// from another service and is not forwarded: return a new one to pass the
+// failure on. A Validate method can return a *ServiceError too. The full
+// error is still logged, dead-lettered and reported to the event callbacks.
 //
 // Retries, the last attempt and the DLQ are covered under Reliability.
 //

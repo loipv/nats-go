@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -286,5 +287,104 @@ func BenchmarkSubscribeRoundTrip(b *testing.B) {
 			b.Fatal(err)
 		}
 		<-done
+	}
+}
+
+// The requester reads a downstream failure only if the handler forwards it on
+// purpose, as a *ServiceError of its own.
+func TestReplyDoesNotForwardReceivedServiceError(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	a.SubscribeReply("front", TypedReply(func(ctx context.Context, m *Msg[int]) (int, error) {
+		_, err := a.Request(ctx, "billing", m.Data, nil)
+		var se *ServiceError
+		if m.Data == 2 && errors.As(err, &se) {
+			return 0, &ServiceError{Code: se.Code, Description: "billing unavailable"}
+		}
+		return 0, fmt.Errorf("billing lookup: %w", err)
+	}))
+	start(t, a)
+	// billing is another service: it answers with its own error text.
+	sub, err := a.Conn().Subscribe("billing", func(m *natsio.Msg) {
+		_ = m.RespondMsg(&natsio.Msg{Header: Header{
+			micro.ErrorHeader:     {`pq: relation "invoices" does not exist (host 10.0.0.5)`},
+			micro.ErrorCodeHeader: {"404"},
+		}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sub.Unsubscribe() }()
+	var se *ServiceError
+	if _, err := a.Request(requestCtx(t), "front", 1, new(int)); !errors.As(err, &se) || se.Code != 500 || se.Description != "internal error" {
+		t.Fatalf("wrapped downstream error: %v, want 500 internal error", err)
+	}
+	if _, err := a.Request(requestCtx(t), "front", 2, new(int)); !errors.As(err, &se) || se.Code != 404 || se.Description != "billing unavailable" {
+		t.Fatalf("forwarded on purpose: %v, want 404 billing unavailable", err)
+	}
+}
+
+// libStore claims every key except "dup" and "busy", whose errors carry text
+// of their own that must not reach the requester.
+type libStore struct{}
+
+func (libStore) Begin(_ context.Context, key string, _ time.Duration) error {
+	switch {
+	case strings.HasSuffix(key, "\x00dup"):
+		return fmt.Errorf("store: secret detail: %w", ErrDuplicate)
+	case strings.HasSuffix(key, "\x00busy"):
+		return fmt.Errorf("store: secret detail: %w", ErrInProgress)
+	}
+	return nil
+}
+func (libStore) Complete(context.Context, string, time.Duration) error { return nil }
+func (libStore) Abort(context.Context, string) error                   { return nil }
+
+// The errors the library itself sends reach the requester with their text,
+// through SubscribeReply and an endpoint alike.
+func TestReplySendsLibraryErrors(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	h := TypedReply(func(context.Context, *Msg[order]) (int, error) { return 1, nil })
+	idem := []HandlerOption{
+		WithIdempotency(WithIdempotencyStore(libStore{}), WithIdempotencyKey(func(m *RawMsg) string { return m.Header.Get("X-Key") })),
+		WithIdempotencyScope("lib"),
+	}
+	a.SubscribeReply("lib.reply", h, idem...)
+	a.Service(micro.Config{Name: "lib", Version: "1.0.0"}).Endpoint("ep", h, append(idem, WithEndpointSubject("lib.ep"))...)
+	start(t, a)
+	for _, subject := range []string{"lib.reply", "lib.ep"} {
+		for _, c := range []struct {
+			name, key string
+			body      any
+			code      int
+			desc      string
+		}{
+			{"decode", "", []byte(`{"id":`), 400, "nats: decode: "},
+			{"validate", "", order{}, 400, "nats: validate: id required"},
+			{"duplicate", "dup", order{ID: "1"}, 400, "nats: duplicate message"},
+			{"in progress", "busy", order{ID: "1"}, 500, "nats: message in progress elsewhere"},
+		} {
+			_, err := a.Request(requestCtx(t), subject, c.body, new(int), WithHeader(Header{"X-Key": {c.key}}))
+			var se *ServiceError
+			if !errors.As(err, &se) || se.Code != c.code || !strings.HasPrefix(se.Description, c.desc) || strings.Contains(se.Description, "secret") {
+				t.Errorf("%s %s: %v, want %d %q", subject, c.name, err, c.code, c.desc)
+			}
+		}
+	}
+}
+
+// A blank description must not turn an error reply into a success.
+func TestReplyBlankDescriptionIsStillAnError(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	a.SubscribeReply("blank", TypedReply(func(context.Context, *Msg[int]) (int, error) {
+		return 0, &ServiceError{Code: 404, Description: " "}
+	}))
+	start(t, a)
+	_, err := a.Request(requestCtx(t), "blank", 1, nil)
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != 404 || se.Description != "internal error" {
+		t.Fatalf("got %v, want 404 internal error", err)
 	}
 }
