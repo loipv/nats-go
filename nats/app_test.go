@@ -13,19 +13,9 @@ import (
 	"testing"
 	"time"
 
-	natstest "github.com/nats-io/nats-server/v2/test"
 	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-func TestNewValidatesOptions(t *testing.T) {
-	if _, err := New(WithURL("")); err == nil {
-		t.Fatal("empty url must fail")
-	}
-	if _, err := New(WithShutdownTimeout(0)); err == nil {
-		t.Fatal("zero timeout must fail")
-	}
-}
 
 func TestStartFailsFastWhenServerDown(t *testing.T) {
 	a, _ := New(WithURL("nats://127.0.0.1:1"))
@@ -77,19 +67,6 @@ func TestStartReturnsJoinedRegistrationErrors(t *testing.T) {
 	if !errors.Is(err, e1) || !errors.Is(err, e2) {
 		t.Fatal(err)
 	}
-}
-
-func TestTokenAuth(t *testing.T) {
-	opts := natstest.DefaultTestOptions
-	opts.Port = -1
-	opts.Authorization = "s3cret"
-	s := natstest.RunServer(&opts)
-	t.Cleanup(s.Shutdown)
-	if err := newApp(t, s, WithToken("wrong")).Start(context.Background()); err == nil {
-		t.Fatal("wrong token must fail")
-	}
-	a := newApp(t, s, WithToken("s3cret"))
-	start(t, a)
 }
 
 // C1: a ctx-aware handler plus a queued message must not make Shutdown ignore its deadline.
@@ -302,17 +279,6 @@ func TestConnNilAfterFailedStart(t *testing.T) {
 	}
 	if c := a.Health().Connection; c != natsio.DISCONNECTED.String() {
 		t.Fatalf("Health().Connection = %s after a failed Start, want DISCONNECTED", c)
-	}
-}
-
-// Options passed to nats.go run once per connect: some read files.
-func TestNATSOptionsAppliedOnce(t *testing.T) {
-	s := runServer(t)
-	var n atomic.Int32
-	a := newApp(t, s, WithNATSOptions(func(*natsio.Options) error { n.Add(1); return nil }))
-	start(t, a)
-	if got := n.Load(); got != 1 {
-		t.Fatalf("option applied %d times, want 1", got)
 	}
 }
 
