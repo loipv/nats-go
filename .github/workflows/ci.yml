@@ -35,12 +35,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
-      - run: go test -race -coverprofile=cover.out ./...
+      # The examples and the test helpers have no tests: build them, and keep them
+      # out of the coverage run, where a package without tests can fail the
+      # command ("no such tool covdata") although every test passed.
+      - run: go build ./...
+      - run: go test -race -coverprofile=cover.out ./nats ./nats/natsotel ./nats/cloudevents
       - name: Coverage gate (90%)
         if: matrix.go-version == 'stable'
         run: |
-          grep -v -e '/examples/' -e '/internal/testutil/' cover.out > lib.out
-          total=$(go tool cover -func=lib.out | awk '/^total:/ {sub("%","",$3); print $3}')
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {sub("%","",$3); print $3}')
           echo "coverage: ${total}%"
           awk -v t="$total" 'BEGIN { exit (t+0 < 90) }'
 
