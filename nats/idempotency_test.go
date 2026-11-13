@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -421,5 +422,22 @@ func TestIdempotencyAppStoreAfterRegistration(t *testing.T) { // Review Focus #4
 	waitFor(t, func() bool { return pendingAcks(t, a, "billing") == 0 && delivered(t, a, "billing") == 1 })
 	if got := rec.recorded(); !slices.Equal(got, []string{"ORDERS/billing\x00o1"}) {
 		t.Fatalf("App store keys %q", got)
+	}
+}
+
+// BenchmarkIdempotentMemoryStore measures what WithIdempotency adds around a
+// handler with a MemoryStore: one Begin and one Complete per new key.
+func BenchmarkIdempotentMemoryStore(b *testing.B) {
+	cfg := idemConfig{store: NewMemoryStore()}.over(idemDefaults)
+	h := idempotent(cfg, "bench")(func(context.Context, *RawMsg) error { return nil })
+	ctx := context.Background()
+	i := 0
+	b.ReportAllocs()
+	for b.Loop() {
+		i++
+		m := &RawMsg{Subject: "s", Header: Header{jetstream.MsgIDHeader: {strconv.Itoa(i)}}}
+		if err := h(ctx, m); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

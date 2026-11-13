@@ -388,3 +388,31 @@ func TestEmptyMsgIDClearsEarlierOne(t *testing.T) {
 		t.Fatalf("Nats-Msg-Id = %q, want none", id)
 	}
 }
+
+// BenchmarkPublish measures a core publish: encoding, options and the write
+// to the connection buffer.
+func BenchmarkPublish(b *testing.B) {
+	a := newApp(b, runServer(b))
+	start(b, a)
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := a.Publish(ctx, "bench.publish", order{ID: "1"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkPublishJS measures a JetStream publish and its ack.
+func BenchmarkPublishJS(b *testing.B) {
+	a := newApp(b, runServer(b))
+	setupStream(b, a)
+	start(b, a)
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := a.PublishJS(ctx, "orders.x", order{ID: "1"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

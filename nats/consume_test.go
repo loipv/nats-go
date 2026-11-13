@@ -12,7 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-func setupStream(t *testing.T, a *App) {
+func setupStream(t testing.TB, a *App) {
 	t.Helper()
 	a.Stream(jetstream.StreamConfig{Name: "ORDERS", Subjects: []string{"orders.>"}})
 	a.Consumer("ORDERS", jetstream.ConsumerConfig{
@@ -258,5 +258,23 @@ func TestConsumeTermCarriesReason(t *testing.T) {
 	}
 	if r := recv(t, reasons); r != "bad input" {
 		t.Fatalf("reason = %q", r)
+	}
+}
+
+// BenchmarkConsumeRoundTrip measures one PublishJS and its delivery to a
+// Consume handler, ack included.
+func BenchmarkConsumeRoundTrip(b *testing.B) {
+	a := newApp(b, runServer(b))
+	setupStream(b, a)
+	done := make(chan struct{}, 1)
+	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { done <- struct{}{}; return nil }))
+	start(b, a)
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := a.PublishJS(ctx, "orders.x", order{ID: "1"}); err != nil {
+			b.Fatal(err)
+		}
+		<-done
 	}
 }

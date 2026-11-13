@@ -19,7 +19,7 @@ import (
 	natstest "github.com/nats-io/nats-server/v2/test"
 )
 
-func runServer(t *testing.T) *server.Server {
+func runServer(t testing.TB) *server.Server {
 	t.Helper()
 	return runServerWith(t, nil)
 }
@@ -94,7 +94,7 @@ func testCerts(t testing.TB) (caFile, serverCert, serverKey, clientCert, clientK
 	return caFile, serverCert, serverKey, clientCert, clientKey
 }
 
-func newApp(t *testing.T, s *server.Server, opts ...Option) *App {
+func newApp(t testing.TB, s *server.Server, opts ...Option) *App {
 	t.Helper()
 	a, err := New(append([]Option{WithURL(s.ClientURL())}, opts...)...)
 	if err != nil {
@@ -103,7 +103,7 @@ func newApp(t *testing.T, s *server.Server, opts ...Option) *App {
 	return a
 }
 
-func start(t *testing.T, a *App) {
+func start(t testing.TB, a *App) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

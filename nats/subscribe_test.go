@@ -214,3 +214,20 @@ func FuzzSubjectMatches(f *testing.F) {
 		}
 	})
 }
+
+// BenchmarkSubscribeRoundTrip measures one core publish and its delivery to a
+// Subscribe handler.
+func BenchmarkSubscribeRoundTrip(b *testing.B) {
+	a := newApp(b, runServer(b))
+	done := make(chan struct{}, 1)
+	a.Subscribe("bench.sub", Typed(func(context.Context, *Msg[order]) error { done <- struct{}{}; return nil }))
+	start(b, a)
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := a.Publish(ctx, "bench.sub", order{ID: "1"}); err != nil {
+			b.Fatal(err)
+		}
+		<-done
+	}
+}
