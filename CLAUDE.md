@@ -7,13 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Tests start an embedded nats-server (`nats-server/v2/test`), so none needs to be running.
 
 ```sh
-go test -race ./...                              # everything (what CI runs)
+go test -race ./...                              # everything
 go test -race -run TestProvisionVerify ./nats/   # one test
-go vet ./...
-go run honnef.co/go/tools/cmd/staticcheck@latest ./...
-golangci-lint run ./...                          # kept at 0 issues locally; not in CI
+golangci-lint run ./...                          # govet and staticcheck included; CI pins v2.13.2
 gofmt -l .
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 ```
+
+CI runs all of these on Go 1.26 and stable, and fails under 90% statement coverage of the three
+library packages (`nats`, `nats/natsotel`, `nats/cloudevents`).
 
 Examples need a real server: `nats-server -js`, then `go run ./examples/<name>` (`NATS_URL` overrides the URL).
 

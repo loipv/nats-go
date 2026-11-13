@@ -504,11 +504,12 @@ The tests start an embedded nats-server, so no server is needed:
 ```sh
 go test -race ./...                       # all tests
 go test -race -run TestProvisionVerify ./nats/  # one test
-go vet ./...
-go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+golangci-lint run ./...                   # govet and staticcheck included
+gofmt -l .
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 ```
 
-CI runs the same commands on Go 1.26 and the latest stable release. The examples need a server: `nats-server -js`, then `go run ./examples/<name>`.
+CI runs the linter, the tests with the race detector on Go 1.26 and the latest stable release, a 90% coverage gate and govulncheck. The examples need a server: `nats-server -js`, then `go run ./examples/<name>`.
 
 ## Status
 
