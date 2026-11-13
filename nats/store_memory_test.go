@@ -17,7 +17,8 @@ func TestMemoryStoreDoneExpires(t *testing.T) {
 	if err := s.Begin(ctx, "k", time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Complete(ctx, "k", 20*time.Millisecond); err != nil {
+	// Long enough that a stalled runner still sees the duplicate below.
+	if err := s.Complete(ctx, "k", 300*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Begin(ctx, "k", time.Minute); !errors.Is(err, ErrDuplicate) {

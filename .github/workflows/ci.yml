@@ -35,11 +35,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
-      # The examples and the test helpers have no tests: build them, and keep them
-      # out of the coverage run, where a package without tests can fail the
-      # command ("no such tool covdata") although every test passed.
+      # The examples and the test helpers have no tests: build them, and run the
+      # coverage profile over every package that has tests. A package without
+      # tests would count as 0%, or fail the command ("no such tool covdata")
+      # although every test passed.
       - run: go build ./...
-      - run: go test -race -coverprofile=cover.out ./nats ./nats/natsotel ./nats/cloudevents
+      - run: |
+          go test -race -coverprofile=cover.out \
+            $(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...)
       - name: Coverage gate (90%)
         if: matrix.go-version == 'stable'
         run: |

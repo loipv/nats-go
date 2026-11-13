@@ -14,8 +14,9 @@ gofmt -l .
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 ```
 
-CI runs all of these on Go 1.26 and stable, and fails under 90% statement coverage of the three
-library packages (`nats`, `nats/natsotel`, `nats/cloudevents`).
+CI builds every package and runs the tests of every package that has tests, with the race detector,
+on Go 1.26 and stable. On stable it also runs gofmt, golangci-lint and govulncheck, and fails under
+90% statement coverage of the packages with tests (`nats`, `nats/natsotel`, `nats/cloudevents`).
 
 Examples need a real server: `nats-server -js`, then `go run ./examples/<name>` (`NATS_URL` overrides the URL).
 
@@ -76,7 +77,7 @@ When the server normalises a field, extend this comparison instead of special-ca
 ## Conventions
 
 - Every error string starts with `nats: ` (sentinels in `errors.go`), and wrapping keeps `errors.Is`/`errors.As` working.
-- Tests map 1:1 to source files (`foo.go` ↔ `foo_test.go`). The only extras are `helpers_test.go` (`runServer`, `newApp`, `start`, `waitFor`, `recv`, `expectNone`) and `example_test.go`. Test unexported code from inside the package; in the subpackages, test through the public API.
+- Tests map 1:1 to source files (`foo.go` ↔ `foo_test.go`). The only extras are `helpers_test.go` (`runServer`, `runServerWith`, `testCerts`, `newApp`, `start`, `waitFor`, `recv`, `expectNone`) and `example_test.go`. Test unexported code from inside the package; in the subpackages, test through the public API.
 - A new behaviour gets a test that fails without the change.
 - Wrap comments at about 100 columns. Docs, README and godoc are in English.
 - Pre-1.0: API changes are allowed, but list user-visible changes for the release notes.

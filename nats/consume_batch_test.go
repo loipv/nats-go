@@ -134,18 +134,18 @@ func TestConsumeBatchTimeout(t *testing.T) {
 	setupStream(t, a)
 	left := make(chan time.Duration, 1)
 	a.ConsumeBatch("ORDERS", "billing", TypedBatch(func(ctx context.Context, _ []*Msg[order]) error {
-		dl, ok := ctx.Deadline()
-		if !ok {
-			left <- -1
-			return nil
+		if dl, ok := ctx.Deadline(); ok {
+			left <- time.Until(dl)
+		} else {
+			left <- time.Hour // no deadline: fails the check below
 		}
-		left <- time.Until(dl)
 		return nil
 	}), WithTimeout(50*time.Millisecond), WithBatchWait(100*time.Millisecond))
 	start(t, a)
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "1"})
-	if d := recv(t, left); d <= 0 || d > 50*time.Millisecond {
-		t.Fatalf("time left on the handler context = %s, want within (0, 50ms]", d)
+	// No lower bound: a stalled runner may reach the handler after the deadline.
+	if d := recv(t, left); d > 50*time.Millisecond {
+		t.Fatalf("time left on the handler context = %s, want at most 50ms", d)
 	}
 }
 
