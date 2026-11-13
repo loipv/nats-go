@@ -246,6 +246,7 @@ func TestEventHandlerRestartingRestarted(t *testing.T) {
 	setupStream(t, a)
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { return len(restarted()) == 1 })
 	rs := restarting()
@@ -430,6 +431,7 @@ func TestEventAsyncRestart(t *testing.T) {
 	a := newApp(t, s, restartFast, WithOnAsyncError(onErr))
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool {
 		return slices.ContainsFunc(errs(), func(e AsyncErrorEvent) bool {
@@ -686,6 +688,7 @@ func TestEventNoRestartErrorOnShutdown(t *testing.T) {
 		WithRestartBackoff(func(int) time.Duration { return time.Millisecond }))
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, hasAsyncPrefix(errs, "ORDERS/billing", "restart: "))
 	if err := a.Shutdown(context.Background()); err != nil {

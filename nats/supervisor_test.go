@@ -18,6 +18,7 @@ func TestSupervisorRecreatesDeclaredConsumer(t *testing.T) {
 	got := make(chan string, 2)
 	a.Consume("ORDERS", "billing", Typed(func(_ context.Context, m *Msg[order]) error { got <- m.Data.ID; return nil }))
 	start(t, a)
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { h := a.Health(); return h.Status == "ok" && h.Handlers[0].Restarts == 1 })
 	_, _ = a.PublishJS(context.Background(), "orders.x", order{ID: "after"})
@@ -34,6 +35,7 @@ func TestSupervisorWaitsForUndeclaredConsumer(t *testing.T) {
 	a := newApp(t, s, restartFast)
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { return a.Health().Handlers[0].State == "restarting" })
 	time.Sleep(300 * time.Millisecond)
@@ -121,9 +123,7 @@ func TestShutdownDuringRestartBackoff(t *testing.T) { // Review Focus #5
 	a := newApp(t, s, WithRestartBackoff(func(int) time.Duration { return time.Hour }))
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
-	// The server drops a pull request that is not waiting yet when the consumer
-	// is deleted, so detection would take a heartbeat timeout.
-	waitFor(t, func() bool { return consumerInfo(t, a, "billing").NumWaiting >= 1 })
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { return a.Health().Handlers[0].State == "restarting" })
 	begin := time.Now()
@@ -141,7 +141,7 @@ func TestRestartDoesNotRecreateVerifyConsumer(t *testing.T) {
 	setupStream(t, a)
 	a.Consume("ORDERS", "billing", Typed(nopOrder))
 	start(t, a)
-	waitFor(t, func() bool { return consumerInfo(t, a, "billing").NumWaiting >= 1 })
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { return a.Health().Handlers[0].State == "restarting" })
 	time.Sleep(300 * time.Millisecond) // several restart attempts

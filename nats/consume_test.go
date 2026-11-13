@@ -36,6 +36,15 @@ func consumerInfo(t *testing.T, a *App, name string) *jetstream.ConsumerInfo {
 	return info
 }
 
+// waitPulling waits until the server holds a pull request of consumer name.
+// The server drops a pull request that is not waiting yet when the consumer is
+// deleted, and then says nothing: the handler would only restart after nats.go
+// misses its heartbeats (30s by default), not within a test's deadline.
+func waitPulling(t *testing.T, a *App, name string) {
+	t.Helper()
+	waitFor(t, func() bool { return consumerInfo(t, a, name).NumWaiting >= 1 })
+}
+
 // delivered counts deliveries, redeliveries included.
 func delivered(t *testing.T, a *App, name string) uint64 {
 	return consumerInfo(t, a, name).Delivered.Consumer
@@ -174,9 +183,7 @@ func TestConsumeRestartingWhenConsumerDeleted(t *testing.T) {
 	setupStream(t, a)
 	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { return nil }))
 	start(t, a)
-	// The server drops a pull request that is not waiting yet when the consumer
-	// is deleted, so detection would take a heartbeat timeout.
-	waitFor(t, func() bool { return consumerInfo(t, a, "billing").NumWaiting >= 1 })
+	waitPulling(t, a, "billing")
 	if err := a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing"); err != nil {
 		t.Fatal(err)
 	}

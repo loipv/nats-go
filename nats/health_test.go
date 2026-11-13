@@ -49,6 +49,7 @@ func TestHealthDegradedWhenHandlerRestarting(t *testing.T) {
 	setupStream(t, a)
 	a.Consume("ORDERS", "billing", Typed(func(context.Context, *Msg[order]) error { return nil }))
 	start(t, a)
+	waitPulling(t, a, "billing")
 	_ = a.JetStream().DeleteConsumer(context.Background(), "ORDERS", "billing")
 	waitFor(t, func() bool { h := a.Health(); return h.Status == "degraded" && h.Handlers[0].State == "restarting" })
 	rec := httptest.NewRecorder()
