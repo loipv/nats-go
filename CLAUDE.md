@@ -80,3 +80,4 @@ When the server normalises a field, extend this comparison instead of special-ca
 - A new behaviour gets a test that fails without the change.
 - Wrap comments at about 100 columns. Docs, README and godoc are in English.
 - Pre-1.0: API changes are allowed, but list user-visible changes for the release notes.
+- Commits follow Conventional Commits. release-please derives the version, the tag and `CHANGELOG.md` from them (`feat!` or a `BREAKING CHANGE` footer bumps the minor version before 1.0), so `CHANGELOG.md` is never edited by hand.

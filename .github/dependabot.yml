@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # "chore" keeps dependency bumps out of the changelog and from triggering a release alone.
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      otel:
+        patterns: ["go.opentelemetry.io/*"]
+      nats:
+        patterns: ["github.com/nats-io/*", "github.com/synadia-io/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
