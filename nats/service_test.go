@@ -85,6 +85,9 @@ func TestServiceErrorsAndStats(t *testing.T) {
 		}
 		return m.Data[0] / m.Data[1], nil
 	}), WithEndpointSubject("calc.div"))
+	svc.Endpoint("find", TypedReply(func(context.Context, *Msg[string]) (int, error) {
+		return 0, &ServiceError{Code: 404, Description: "unknown sku"}
+	}), WithEndpointSubject("calc.find"))
 	start(t, a)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -93,15 +96,23 @@ func TestServiceErrorsAndStats(t *testing.T) {
 		t.Fatal(r, err)
 	}
 	var se *ServiceError
-	if _, err := a.Request(ctx, "calc.div", [2]int{1, 0}, new(int)); !errors.As(err, &se) || se.Code != 500 || se.Description != "division by zero" {
-		t.Fatal(err)
-	}
 	if _, err := a.Request(ctx, "calc.div", "not-an-array", new(int)); !errors.As(err, &se) || se.Code != 400 {
 		t.Fatal(err)
 	}
+	if _, err := a.Request(ctx, "calc.div", [2]int{1, 0}, new(int)); !errors.As(err, &se) || se.Code != 500 || se.Description != "internal error" {
+		t.Fatalf("a handler error: %v, want 500 internal error", err)
+	}
+	if _, err := a.Request(ctx, "calc.find", "x", new(int)); !errors.As(err, &se) || se.Code != 404 || se.Description != "unknown sku" {
+		t.Fatalf("a *ServiceError: %v, want 404 unknown sku", err)
+	}
 	st := ctlRequest[micro.Stats](t, a, micro.StatsVerb, "calc")
-	if st.Endpoints[0].NumRequests != 3 || st.Endpoints[0].NumErrors != 2 {
-		t.Fatal(st.Endpoints[0])
+	div := st.Endpoints[0]
+	if div.NumRequests != 3 || div.NumErrors != 2 {
+		t.Fatal(div)
+	}
+	// STATS is readable by anyone allowed to send requests.
+	if strings.Contains(div.LastError, "division by zero") || !strings.Contains(div.LastError, "internal error") {
+		t.Fatalf("LastError = %q, want the description sent, not the handler error", div.LastError)
 	}
 }
 

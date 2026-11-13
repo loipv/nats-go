@@ -157,9 +157,13 @@ An option used on a handler kind it does not apply to makes `Start` fail.
 | Handler returns | JetStream message | Retry | DLQ | Reply |
 |---|---|---|---|---|
 | `nil` | `Ack` | - | - | encoded response |
-| any other error | `NakWithDelay` by the backoff, until `WithMaxAttempts` is used up; then `Term` | yes, unless `WithMaxAttempts` is 1 | after the last attempt, if `WithDLQ(subject)` is set | `Nats-Service-Error`, code 500 |
-| `nats.Terminal(err)`, decode or validation failure | `Term` (never redelivered) | no | immediately, if `WithDLQ(subject)` is set | `Nats-Service-Error`, code 400 |
-| panic | handled as any other error | as above | as above | `Nats-Service-Error: internal error`, code 500; the panic and stack are only logged |
+| any other error | `NakWithDelay` by the backoff, until `WithMaxAttempts` is used up; then `Term` | yes, unless `WithMaxAttempts` is 1 | after the last attempt, if `WithDLQ(subject)` is set | 500 `internal error` |
+| `nats.Terminal(err)` | `Term` (never redelivered) | no | immediately, if `WithDLQ(subject)` is set | 400 `bad request` |
+| decode or validation failure | as `Terminal` | as `Terminal` | as `Terminal` | 400 and the failure |
+| `*nats.ServiceError{Code, Description}` | as the error it is (`Terminal` or not) | as left | as left | its code and description |
+| panic | handled as any other error | as above | as above | 500 `internal error` |
+
+A requester never receives the text of a handler error, which may name a host, a table or a query. Return a `*nats.ServiceError` to choose the code and the description it gets; wrap it in `nats.Terminal` to also stop the retries. The full error is still logged, dead-lettered (`Nats-DLQ-Error`) and passed to the event callbacks. The Reply column applies to `SubscribeReply`, endpoints and `m.RespondError`.
 
 Every `Term` carries the first line of the error as its reason, reported by the server in the `$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED` advisory. Retry runs whether or not `WithDLQ` is set; `WithDLQ(subject)` only decides where a message goes once its attempts are used up (the DLQ, or, without it, a log line and `Term`). `Consume` and `ConsumeBatch` retry forever by default; `Subscribe`, `SubscribeReply` and `ConsumeOrdered` do not retry unless `WithMaxAttempts(n)` is set.
 
@@ -365,7 +369,7 @@ Any other error fails the whole batch. A non-nil `*BatchError` is found even ins
 
 ### Panics
 
-A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. The requester of a `SubscribeReply` handler or micro endpoint that panicked gets `Nats-Service-Error: internal error` with code 500, never the panic text. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
+A panic in a handler is recovered by the worker, logged with its stack and handled like any other error. The requester of a `SubscribeReply` handler or micro endpoint that panicked gets `internal error` with code 500, as for any other error. `nats.Recover()` is still useful to make middleware around the handler see the panic as an error.
 
 ## Integrations
 
@@ -382,7 +386,7 @@ inv.Endpoint("get", nats.TypedReply(func(ctx context.Context, m *nats.Msg[GetSto
 inv.Group("admin").Endpoint("reset", nats.TypedReply(reset), nats.WithEndpointMetadata(map[string]string{"owner": "ops"})) // inventory.admin.reset
 ```
 
-`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `SubscribeReply`: the returned value is encoded and sent back, `Terminal(err)` and validation failures answer with code 400, any other error with 500, and the service `STATS` count the errors. `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff`, `WithDLQ`, `WithIdempotency` and `WithIdempotencyScope` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint, named after the service, the group prefixes and the endpoint joined with `.` (`orders.v2.get`); two endpoints with the same such name make `Start` fail. A request without a reply subject is skipped with a warning.
+`nats micro ls`, `info` and `stats` find the service once the app starts. An endpoint works like `SubscribeReply`: the returned value is encoded and sent back, an error is answered as in the [Errors](#errors) table, and the service `STATS` count the errors (they show the description sent, not the handler error). `WithTimeout`, `WithMiddleware`, `WithMaxAttempts`, `WithBackoff`, `WithDLQ`, `WithIdempotency` and `WithIdempotencyScope` apply; `WithEndpointSubject` and `WithEndpointMetadata` are specific to endpoints. `cfg` is passed to `micro.AddService` as is, and `Health` reports one `endpoint` handler per endpoint, named after the service, the group prefixes and the endpoint joined with `.` (`orders.v2.get`); two endpoints with the same such name make `Start` fail. A request without a reply subject is skipped with a warning.
 
 - An endpoint handles one request at a time per instance. Scale with more instances: they share a queue group.
 - `WithMaxAttempts`, `WithBackoff` and `Unlimited` stall the endpoint while a request is retried, and the whole retry time must fit the requester's timeout.

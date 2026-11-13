@@ -64,9 +64,10 @@ func (m *Msg[T]) Respond(v any) error {
 }
 
 // RespondError answers a request received by Subscribe with err, as
-// SubscribeReply does: in the Nats-Service-Error headers, with code 400 for
-// Terminal errors and 500 otherwise, and "internal error" for a panic. The
-// requester's App.Request returns it as *ServiceError. It fails like Respond.
+// SubscribeReply does: in the Nats-Service-Error headers, a *ServiceError with
+// its code and description, any other error as "internal error" (500) or, when
+// Terminal, "bad request" (400). The requester's App.Request returns it as
+// *ServiceError. It fails like Respond.
 func (m *Msg[T]) RespondError(err error) error {
 	if cerr := m.canRespond(); cerr != nil {
 		return cerr
@@ -139,11 +140,11 @@ func (m *Msg[T]) InProgress() error {
 func decodeMsg[T any](ctx context.Context, c Codec, raw *RawMsg) (*Msg[T], error) {
 	data, err := decode[T](c, raw.Data)
 	if err != nil {
-		return nil, Terminal(fmt.Errorf("nats: decode: %w", err))
+		return nil, Terminal(shown(fmt.Errorf("nats: decode: %w", err)))
 	}
 	if v, ok := any(&data).(interface{ Validate() error }); ok {
 		if err := v.Validate(); err != nil {
-			return nil, Terminal(fmt.Errorf("nats: validate: %w", err))
+			return nil, Terminal(shown(fmt.Errorf("nats: validate: %w", err)))
 		}
 	}
 	_, owned := ctx.Value(replyKey{}).(*reply)

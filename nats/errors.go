@@ -44,7 +44,8 @@ func (e *terminalError) Unwrap() error { return e.err }
 
 // Terminal marks err as non-retryable. A JetStream message whose handler
 // returns a terminal error is terminated (Term) instead of redelivered (Nak),
-// and a SubscribeReply handler responds with code 400 instead of 500.
+// and a SubscribeReply or endpoint requester gets code 400 "bad request"
+// instead of 500 "internal error", unless err holds a *ServiceError.
 // Terminal(nil) returns nil.
 func Terminal(err error) error {
 	if err == nil {
@@ -62,11 +63,60 @@ func IsTerminal(err error) bool {
 // ServiceError is the error a requester receives when the responder's handler
 // failed. It is carried in the Nats-Service-Error and Nats-Service-Error-Code
 // headers, compatible with the NATS micro protocol.
+//
+// A SubscribeReply or endpoint handler, or Msg.RespondError, returns a
+// *ServiceError to choose what the requester gets: Code (500 when not
+// positive, 400 for a Terminal error) and the first line of Description
+// ("internal error" or "bad request" when empty). The text of any other
+// handler error is never sent; see Terminal. A *ServiceError only decides what
+// the requester sees: wrap it with Terminal to also stop the retries.
 type ServiceError struct {
 	Code        int
 	Description string
 }
 
 func (e *ServiceError) Error() string {
+	if e == nil {
+		return "nats: service error"
+	}
 	return fmt.Sprintf("nats: service error %d: %s", e.Code, e.Description)
+}
+
+// shownError marks a library error whose first line may be sent to a
+// requester: a decode or validation failure.
+type shownError struct{ err error }
+
+func (e *shownError) Error() string { return e.err.Error() }
+func (e *shownError) Unwrap() error { return e.err }
+
+func shown(err error) error { return &shownError{err: err} }
+
+// replyError returns the code and the description a requester gets for a
+// handler error. Only a *ServiceError, a decode or validation failure and the
+// idempotency sentinels carry their own text; every other error, a panic
+// included, becomes "internal error" (500) or, when Terminal, "bad request"
+// (400), and stays in the server log.
+func replyError(err error) (code int, description string) {
+	code, description = 500, "internal error"
+	if IsTerminal(err) {
+		code, description = 400, "bad request"
+	}
+	var se *ServiceError
+	var sh *shownError
+	switch {
+	case errors.As(err, &se) && se != nil:
+		if se.Code > 0 {
+			code = se.Code
+		}
+		if d := firstLine(errors.New(se.Description)); d != "" {
+			description = d
+		}
+	case errors.As(err, &sh):
+		description = firstLine(sh)
+	case errors.Is(err, ErrDuplicate):
+		code, description = 400, ErrDuplicate.Error()
+	case errors.Is(err, ErrInProgress):
+		code, description = 500, ErrInProgress.Error()
+	}
+	return code, description
 }

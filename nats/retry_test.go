@@ -291,3 +291,34 @@ func TestExponentialBackoffNoOverflow(t *testing.T) {
 		}
 	}
 }
+
+// A *ServiceError chooses what the requester sees; Terminal still decides retries.
+func TestServiceErrorDoesNotDecideRetry(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	var busy, gone atomic.Int32
+	a.SubscribeReply("busy", TypedReply(func(context.Context, *Msg[int]) (int, error) {
+		busy.Add(1)
+		return 0, &ServiceError{Code: 503, Description: "busy"}
+	}), WithMaxAttempts(3), fast)
+	a.SubscribeReply("gone", TypedReply(func(context.Context, *Msg[int]) (int, error) {
+		gone.Add(1)
+		return 0, Terminal(&ServiceError{Code: 404, Description: "gone"})
+	}), WithMaxAttempts(3), fast)
+	start(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var se *ServiceError
+	if _, err := a.Request(ctx, "busy", 1, new(int)); !errors.As(err, &se) || se.Code != 503 || se.Description != "busy" {
+		t.Fatalf("busy: %v, want 503 busy", err)
+	}
+	if n := busy.Load(); n != 3 {
+		t.Fatalf("busy handler ran %d times, want 3", n)
+	}
+	if _, err := a.Request(ctx, "gone", 1, new(int)); !errors.As(err, &se) || se.Code != 404 || se.Description != "gone" {
+		t.Fatalf("gone: %v, want 404 gone", err)
+	}
+	if n := gone.Load(); n != 1 {
+		t.Fatalf("gone handler ran %d times, want 1", n)
+	}
+}

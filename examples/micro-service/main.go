@@ -77,8 +77,9 @@ func main() {
 		defer mu.Unlock()
 		q, ok := stock[m.Data.SKU]
 		if !ok {
-			// Terminal errors reach the caller with code 400, others with 500.
-			return Stock{}, nats.Terminal(errors.New("unknown sku"))
+			// The caller reads this code and text; other errors arrive as 500
+			// "internal error".
+			return Stock{}, &nats.ServiceError{Code: 404, Description: "unknown sku"}
 		}
 		return Stock{SKU: m.Data.SKU, Quantity: q}, nil
 	}), nats.WithEndpointMetadata(map[string]string{"owner": "warehouse"}))

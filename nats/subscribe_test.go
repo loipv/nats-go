@@ -51,12 +51,16 @@ func TestSubscribeQueueGroupDeliversOnce(t *testing.T) {
 func TestReplyRespondsAndMapsErrors(t *testing.T) {
 	s := runServer(t)
 	a := newApp(t, s)
-	a.SubscribeReply("math.double", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
-		if m.Data < 0 {
-			return 0, Terminal(errors.New("negative"))
-		}
-		if m.Data == 0 {
-			return 0, errors.New("boom")
+	a.SubscribeReply("math.double", TypedReply(func(_ context.Context, m *Msg[int]) (any, error) {
+		switch m.Data {
+		case -1:
+			return nil, Terminal(errors.New("negative"))
+		case 0:
+			return nil, errors.New("db down")
+		case 404:
+			return nil, &ServiceError{Code: 404, Description: "no such order"}
+		case 7:
+			return make(chan int), nil // cannot be encoded
 		}
 		return m.Data * 2, nil
 	}))
@@ -65,13 +69,66 @@ func TestReplyRespondsAndMapsErrors(t *testing.T) {
 	if err != nil || string(r.Data) != "42" {
 		t.Fatal(r, err)
 	}
-	r, _ = a.Conn().Request("math.double", []byte("-1"), time.Second)
-	if r.Header.Get("Nats-Service-Error-Code") != "400" || r.Header.Get("Nats-Service-Error") != "negative" {
-		t.Fatal(r.Header)
+	for _, c := range []struct {
+		in   int
+		code int
+		desc string
+	}{
+		{-1, 400, "bad request"},
+		{0, 500, "internal error"},
+		{404, 404, "no such order"},
+		{7, 500, "internal error"},
+	} {
+		_, err := a.Request(requestCtx(t), "math.double", c.in, new(int))
+		var se *ServiceError
+		if !errors.As(err, &se) || se.Code != c.code || se.Description != c.desc {
+			t.Errorf("request %d: %v, want %d %q", c.in, err, c.code, c.desc)
+		}
 	}
-	r, _ = a.Conn().Request("math.double", []byte("0"), time.Second)
-	if r.Header.Get("Nats-Service-Error-Code") != "500" {
-		t.Fatal(r.Header)
+}
+
+// The requester gets the generic text; the operator still sees the error.
+func TestReplyHiddenErrorStillReachesOperator(t *testing.T) {
+	s := runServer(t)
+	onDL, dead := collect[MsgEvent]()
+	a := newApp(t, s, WithOnDeadLettered(onDL))
+	setupDLQ(t, a)
+	a.SubscribeReply("secret", TypedReply(func(context.Context, *Msg[int]) (int, error) {
+		return 0, errors.New("db down: 10.0.0.5")
+	}), WithDLQ("dlq.secret"))
+	start(t, a)
+	_, err := a.Request(requestCtx(t), "secret", 1, new(int))
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Description != "internal error" {
+		t.Fatalf("requester got %v, want internal error", err)
+	}
+	waitFor(t, func() bool { return len(dead()) == 1 })
+	if e := dead()[0].Err; e == nil || !strings.Contains(e.Error(), "db down: 10.0.0.5") {
+		t.Fatalf("dead-letter event error = %v, want the handler error", e)
+	}
+	msgs := dlqMsgs(t, a)
+	if len(msgs) != 1 || msgs[0].Header.Get("Nats-DLQ-Error") != "db down: 10.0.0.5" {
+		t.Fatalf("DLQ copy = %v, want Nats-DLQ-Error with the handler error", msgs)
+	}
+}
+
+// A typed-nil *ServiceError is still an error; nothing that prints it may panic.
+func TestReplyTypedNilServiceError(t *testing.T) {
+	s := runServer(t)
+	a := newApp(t, s)
+	setupDLQ(t, a)
+	a.SubscribeReply("nil", TypedReply(func(context.Context, *Msg[int]) (int, error) {
+		var se *ServiceError
+		return 0, se
+	}), WithDLQ("dlq.nil"))
+	start(t, a)
+	_, err := a.Request(requestCtx(t), "nil", 1, new(int))
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != 500 || se.Description != "internal error" {
+		t.Fatalf("requester got %v, want 500 internal error", err)
+	}
+	if msgs := dlqMsgs(t, a); len(msgs) != 1 || msgs[0].Header.Get("Nats-DLQ-Error") != "nats: service error" {
+		t.Fatalf("DLQ copy = %v", msgs)
 	}
 }
 

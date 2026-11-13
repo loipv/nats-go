@@ -103,8 +103,15 @@
 //
 //	returned error                  JetStream      Reply
 //	nil                             Ack            encoded response
-//	other error                     NakWithDelay   Nats-Service-Error, code 500
-//	Terminal(err), decode/validate  Term           Nats-Service-Error, code 400
+//	other error                     NakWithDelay   500 "internal error"
+//	Terminal(err)                   Term           400 "bad request"
+//	decode or validation failure    Term           400 and the failure
+//	*ServiceError                   as its error   its Code and Description
+//
+// A requester never receives the text of a handler error: return a
+// *ServiceError to choose the code and the description (wrap it with Terminal
+// to also stop the retries). The full error is still logged, dead-lettered
+// and reported to the event callbacks.
 //
 // Retries, the last attempt and the DLQ are covered under Reliability.
 //
@@ -146,8 +153,8 @@
 //
 // A panic in a handler is recovered by the worker and handled like any other
 // error; the panic value and stack are logged. A requester of a SubscribeReply handler
-// or micro endpoint that panicked receives Nats-Service-Error "internal
-// error" with code 500, never the panic text. Recover only turns the panic
+// or micro endpoint that panicked receives "internal error" with code 500, as
+// for any other error. Recover only turns the panic
 // into an error earlier, for the middleware around it.
 //
 // The DLQ subject must be a valid subject without wildcard tokens (* or >),
@@ -240,8 +247,8 @@
 // Service registers a NATS micro service, found by "nats micro ls|info|stats".
 // Endpoint adds typed endpoints to it, or to a Group of it, and works like
 // SubscribeReply: the returned value is encoded and sent back, and an error
-// becomes a micro service error (code 400 for Terminal, 500 otherwise) that
-// the service STATS count. A request without a reply subject is skipped with
+// becomes a micro service error, sent as SubscribeReply sends it, that the
+// service STATS count. A request without a reply subject is skipped with
 // a warning. Health reports one handler per endpoint, named after the
 // service, the group prefixes and the endpoint joined with "."
 // (orders.v2.get). The WithTimeout, WithMiddleware, WithMaxAttempts,

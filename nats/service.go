@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -74,9 +75,9 @@ func (g *GroupRef) Group(prefix string, opts ...micro.GroupOpt) *GroupRef {
 // Endpoint registers h as a micro endpoint of the service. The subject is the
 // group prefixes followed by WithEndpointSubject, or name if unset. Requests are
 // handled like SubscribeReply: the returned value is encoded and sent back, and an
-// error is sent as a micro service error (code 400 for Terminal errors, 500
-// otherwise; a panic is sent as "internal error" with code 500), counted in
-// the service STATS. A request without a reply subject is dropped with a Warn
+// error is sent as a micro service error as SubscribeReply sends it (a
+// *ServiceError as is, any other error without its text), counted in the
+// service STATS. A request without a reply subject is dropped with a Warn
 // log and the handler is not called. On Shutdown, requests already
 // delivered to the endpoint are still handled and answered, within the
 // Shutdown deadline.
@@ -260,11 +261,8 @@ func (r *serviceRunner) handler(a *App, name string, e endpointReg) micro.Handle
 		switch {
 		case abandoned:
 		case err != nil:
-			desc := errorDescription(err)
-			if desc == "" {
-				desc = "error"
-			}
-			if err := req.Error(errorCode(err), desc, nil); err != nil {
+			code, desc := replyError(err)
+			if err := req.Error(strconv.Itoa(code), desc, nil); err != nil {
 				log.Error("nats: send error response", "subject", m.Subject, "error", err)
 				log.asyncErr(m.Subject, fmt.Errorf("respond: %w", err))
 			}

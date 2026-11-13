@@ -48,7 +48,7 @@ func TestRequestTypedAndServiceError(t *testing.T) {
 	a := newApp(t, s)
 	a.SubscribeReply("inc", TypedReply(func(_ context.Context, m *Msg[int]) (int, error) {
 		if m.Data < 0 {
-			return 0, Terminal(errors.New("negative"))
+			return 0, &ServiceError{Code: 400, Description: "negative"}
 		}
 		return m.Data + 1, nil
 	}))

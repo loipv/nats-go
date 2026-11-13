@@ -35,13 +35,20 @@ func TestSubscribeRespondError(t *testing.T) {
 		if m.RespondError(nil) == nil {
 			t.Error("RespondError(nil) must fail")
 		}
+		if m.Data == -2 {
+			return m.RespondError(&ServiceError{Code: 422, Description: "negative"})
+		}
 		return m.RespondError(Terminal(errors.New("negative\nstack")))
 	}))
 	start(t, a)
 	_, err := a.Request(requestCtx(t), "check", -1, nil)
 	var se *ServiceError
-	if !errors.As(err, &se) || se.Code != 400 || se.Description != "negative" {
-		t.Fatal(err)
+	if !errors.As(err, &se) || se.Code != 400 || se.Description != "bad request" {
+		t.Fatalf("a Terminal error: %v, want 400 bad request", err)
+	}
+	_, err = a.Request(requestCtx(t), "check", -2, nil)
+	if !errors.As(err, &se) || se.Code != 422 || se.Description != "negative" {
+		t.Fatalf("a *ServiceError: %v, want 422 negative", err)
 	}
 }
 

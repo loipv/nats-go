@@ -2,8 +2,8 @@ package nats
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,10 +26,12 @@ func (a *App) Subscribe(subject string, h MsgHandler, opts ...HandlerOption) {
 
 // SubscribeReply registers h as the responder for requests on subject. The returned
 // value is encoded and sent back. A returned error is sent back in the
-// Nats-Service-Error and Nats-Service-Error-Code headers: code 400 for
-// Terminal errors (including decode and validation failures), 500 otherwise.
-// A panic in h is sent as "internal error" with code 500; the panic and its
-// stack are only logged. A middleware that returns nil without calling next
+// Nats-Service-Error and Nats-Service-Error-Code headers, without its text:
+// return a *ServiceError to choose the code and the description. A decode or
+// validation failure is sent as is with code 400. Any other error, a panic or
+// a response that cannot be encoded is sent as "internal error" (500), or
+// "bad request" (400) when Terminal; the full error is logged and
+// dead-lettered. A middleware that returns nil without calling next
 // sends nothing, so the requester times out (an endpoint sends an empty
 // response instead).
 //
@@ -194,29 +196,13 @@ func (a *App) handleRequest(ctx context.Context, h Handler, m *RawMsg, rc retryC
 	return resp, false, nil
 }
 
-// errorCode is the service error code for a handler error: 400 for Terminal
-// errors (including decode and validation failures), 500 otherwise.
-func errorCode(err error) string {
-	if IsTerminal(err) {
-		return "400"
-	}
-	return "500"
-}
-
-// errorDescription is the first line of err, or "internal error" for a panic,
-// whose text stays in the server log.
-func errorDescription(err error) string {
-	if errors.As(err, new(*panicError)) {
-		return "internal error"
-	}
-	return firstLine(err)
-}
-
-// respondError answers req with err in the micro error headers.
+// respondError answers req with err in the micro error headers, as
+// replyError maps it.
 func respondError(req *RawMsg, err error) error {
+	code, desc := replyError(err)
 	return req.RespondMsg(&natsio.Msg{Header: Header{
-		micro.ErrorHeader:     {errorDescription(err)},
-		micro.ErrorCodeHeader: {errorCode(err)},
+		micro.ErrorHeader:     {desc},
+		micro.ErrorCodeHeader: {strconv.Itoa(code)},
 	}})
 }
 
