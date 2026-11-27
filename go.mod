@@ -5,9 +5,9 @@ go 1.26.0
 require (
 	github.com/nats-io/jwt/v2 v2.8.3
 	github.com/nats-io/nats-server/v2 v2.15.3
-	github.com/nats-io/nats.go v1.55.0
+	github.com/nats-io/nats.go v1.56.0
 	github.com/nats-io/nkeys v0.4.17
-	github.com/synadia-io/orbit.go/jetstreamext v0.3.2
+	github.com/synadia-io/orbit.go/jetstreamext v0.4.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
